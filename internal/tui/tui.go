@@ -86,7 +86,8 @@ func tick() tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-func (m *model) wait() tea.Cmd {
+// nextEvent waits for the next bus event.
+func (m *model) nextEvent() tea.Cmd {
 	return func() tea.Msg {
 		e, ok := <-m.ch
 		if !ok {
@@ -96,7 +97,7 @@ func (m *model) wait() tea.Cmd {
 	}
 }
 
-func (m *model) Init() tea.Cmd { return tea.Batch(tick(), m.wait()) }
+func (m *model) Init() tea.Cmd { return tea.Batch(tick(), m.nextEvent()) }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -121,7 +122,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.scroll++
 			}
 		}
-		return m, m.wait()
+		return m, m.nextEvent()
 	case tea.KeyMsg:
 		return m, m.key(msg.String())
 	}
@@ -155,17 +156,17 @@ func (m *model) key(k string) tea.Cmd {
 		}
 	case "s":
 		if n := m.selected(); n != "" {
-			m.status = result("start "+n, m.b.StartProject(n))
+			m.status = outcome("start "+n, m.b.StartProject(n))
 		}
 	case "x":
 		if n := m.selected(); n != "" {
-			m.status = result("stop "+n, m.b.StopProject(n))
+			m.status = outcome("stop "+n, m.b.StopProject(n))
 		}
 	}
 	return nil
 }
 
-func result(what string, err error) string {
+func outcome(what string, err error) string {
 	if err != nil {
 		return what + ": " + err.Error()
 	}
@@ -193,7 +194,8 @@ var (
 	}
 )
 
-func human(d time.Duration) string {
+// compactDuration renders d as "1h05m", "3m07s" or "12s".
+func compactDuration(d time.Duration) string {
 	d = d.Round(time.Second)
 	switch {
 	case d >= time.Hour:
@@ -223,17 +225,17 @@ func (m *model) View() string {
 	for i, s := range m.snaps {
 		uptime, idle := "-", "-"
 		if s.RunningSince != nil {
-			uptime = human(time.Since(*s.RunningSince))
+			uptime = compactDuration(time.Since(*s.RunningSince))
 		}
 		if s.IdleDeadline != nil {
-			idle = human(time.Until(*s.IdleDeadline))
+			idle = compactDuration(time.Until(*s.IdleDeadline))
 		}
 		line := pad(s.Name, 20) + pad(stateColor[s.State].Render(string(s.State)), 11) + pad(m.ports[s.Name], 24) +
 			pad(fmt.Sprint(s.Conns), 7) + pad(uptime, 10) + idle
 		if s.LastError != "" {
 			line += levelColor[events.LevelError].Render("  ! " + s.LastError)
 		}
-		if len(line) > inner {
+		if lipgloss.Width(line) > inner {
 			line = lipgloss.NewStyle().MaxWidth(inner).Render(line)
 		}
 		if i == m.cursor {

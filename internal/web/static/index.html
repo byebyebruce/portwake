@@ -207,6 +207,9 @@ dialog::backdrop { background: #00000066; backdrop-filter: blur(2px); }
           <option value="start_fail,error">错误</option>
           <option value="config_change">配置变更</option>
         </select>
+        <select x-model.number="evFilter.hours" @change="loadEvents(true)">
+          <option :value="0">全部时间</option><option :value="1">最近 1 小时</option><option :value="24">最近 24 小时</option><option :value="168">最近 7 天</option>
+        </select>
         <button class="btn" @click="loadEvents(true)">刷新</button>
       </div>
     </div>
@@ -256,8 +259,13 @@ dialog::backdrop { background: #00000066; backdrop-filter: blur(2px); }
         <table>
           <thead><tr><th>项目</th><th class="num">拉起</th><th class="num">失败</th><th class="num">平均启动</th><th class="num">累计运行</th><th class="num">连接</th><th class="num">请求</th><th class="num">入</th><th class="num">出</th></tr></thead>
           <tbody>
-            <template x-for="s in stats" :key="s.project">
-              <tr><td x-text="s.project"></td><td class="num" x-text="s.starts"></td><td class="num" x-text="s.start_fails"></td><td class="num" x-text="s.starts ? dur(s.avg_start_ms) : '—'"></td><td class="num" x-text="dur(s.runtime_ms)"></td><td class="num" x-text="s.conns"></td><td class="num" x-text="s.requests"></td><td class="num" x-text="bytes(s.bytes_in)"></td><td class="num" x-text="bytes(s.bytes_out)"></td></tr>
+            <template x-for="row in statRows()" :key="row.key">
+              <tr :class="{'lvl-dim': row.port}">
+                <td x-text="row.port ? '　└ :' + row.port : row.project"></td>
+                <td class="num" x-text="row.port ? '' : row.starts"></td><td class="num" x-text="row.port ? '' : row.start_fails"></td>
+                <td class="num" x-text="row.port ? '' : (row.starts ? dur(row.avg_start_ms) : '—')"></td><td class="num" x-text="row.port ? '' : dur(row.runtime_ms)"></td>
+                <td class="num" x-text="row.conns"></td><td class="num" x-text="row.requests"></td><td class="num" x-text="bytes(row.bytes_in)"></td><td class="num" x-text="bytes(row.bytes_out)"></td>
+              </tr>
             </template>
           </tbody>
         </table>
@@ -349,7 +357,7 @@ function app() {
     tabs: [{id: 'overview', label: '概览'}, {id: 'events', label: '事件'}, {id: 'stats', label: '统计'}, {id: 'yaml', label: '导入导出'}],
     tab: 'overview', connected: false, now: Date.now(),
     projects: [], status: {}, live: [], seq: 0,
-    evList: [], evMore: false, evFilter: {project: '', type: ''},
+    evList: [], evMore: false, evFilter: {project: '', type: '', hours: 0},
     stats: [], records: [], statProject: '', statRange: 168, tot: {}, charts: [],
     yaml: '', yamlErr: '', editing: null, formErr: '', toast: {msg: '', err: false},
 
@@ -493,6 +501,7 @@ function app() {
       const q = new URLSearchParams({limit: 100});
       if (this.evFilter.project) q.set('project', this.evFilter.project);
       if (this.evFilter.type) q.set('type', this.evFilter.type);
+      if (this.evFilter.hours) q.set('since', new Date(Date.now() - this.evFilter.hours * 3600e3).toISOString());
       if (!reset && this.evList.length) q.set('before_id', this.evList[this.evList.length - 1].id);
       const rows = await this.api('GET', 'events?' + q).catch(() => []);
       this.evList = reset ? rows : this.evList.concat(rows);
@@ -517,6 +526,14 @@ function app() {
       }
       this.tot = tot;
       this.drawCharts(hours, from);
+    },
+    statRows() {
+      const out = [];
+      for (const s of this.stats) {
+        out.push({...s, key: s.project});
+        if ((s.ports || []).length > 1 || this.statProject) for (const p of s.ports || []) out.push({...p, key: s.project + ':' + p.port});
+      }
+      return out;
     },
     drawCharts(hours, from) {
       this.charts.forEach(c => c.destroy()); this.charts = [];

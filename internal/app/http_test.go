@@ -100,3 +100,35 @@ func TestHTTPReadinessIgnoresPortProxyThatClosesConnections(t *testing.T) {
 		t.Fatalf("first request status = %d", resp.StatusCode)
 	}
 }
+
+func TestUpgradedConnectionGetsGracePeriodThenIsClosed(t *testing.T) {
+	entry, up := freePort(t), freePort(t)
+	h := start(t, httpProject("site", entry, up, ""))
+
+	c, err := net.Dial("tcp", addr(entry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	fmt.Fprintf(c, "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+	br := bufio.NewReader(c)
+	if resp, err := http.ReadResponse(br, nil); err != nil || resp.StatusCode != 101 {
+		t.Fatalf("upgrade: %v %v", resp, err)
+	}
+
+	stopped := make(chan struct{})
+	go func() { h.stop(); close(stopped) }()
+	time.Sleep(50 * time.Millisecond) // inside the 200ms grace period
+	io.WriteString(c, "during\n")
+	if line, err := br.ReadString('\n'); err != nil || line != "during\n" {
+		t.Fatalf("upgraded conn cut before grace expired: %q %v", line, err)
+	}
+	<-stopped
+	c.SetDeadline(time.Now().Add(time.Second))
+	_, err = br.ReadString('\n')
+	var ne net.Error
+	if err == nil || (errors.As(err, &ne) && ne.Timeout()) {
+		t.Fatalf("upgraded conn still open after shutdown: %v", err)
+	}
+}

@@ -94,7 +94,11 @@ func (p *Project) Normalize() {
 
 var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
-// Validate normalizes and checks a complete project set.
+// ErrInvalid marks errors caused by a configuration that cannot be applied.
+var ErrInvalid = errors.New("invalid configuration")
+
+// Validate fills route defaults in place (see Normalize) and checks a
+// complete project set. Errors wrap ErrInvalid.
 func Validate(projects []Project) error {
 	names := map[string]bool{}
 	ports := map[int]string{}
@@ -138,7 +142,10 @@ func Validate(projects []Project) error {
 			}
 		}
 	}
-	return errors.Join(errs...)
+	if len(errs) > 0 {
+		return fmt.Errorf("%w: %w", ErrInvalid, errors.Join(errs...))
+	}
+	return nil
 }
 
 // File is the YAML import/export document.

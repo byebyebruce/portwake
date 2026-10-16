@@ -111,3 +111,30 @@ func TestExternallyStartedProjectIsTakenOverAndIdleStopped(t *testing.T) {
 	eventually(t, "detected running", func() bool { return h.state("web") == "running" })
 	eventually(t, "idle stopped", func() bool { return h.fake.StopCalls("web") == 1 && !h.fake.IsRunning("web") })
 }
+
+func TestUnrelatedConfigChangeDoesNotResetIdleCountdown(t *testing.T) {
+	entry, up := freePort(t), freePort(t)
+	h := start(t, config(projectYAML("web", entry, up, "    idle_timeout: 1h\n")))
+	if _, err := echo(t, entry, "x"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := func() time.Time {
+		var rows []statusRow
+		h.getJSON("/api/status", &rows)
+		for _, r := range rows {
+			if r.Name == "web" && r.IdleDeadline != nil {
+				return *r.IdleDeadline
+			}
+		}
+		t.Fatal("no idle deadline")
+		return time.Time{}
+	}
+	before := deadline()
+	time.Sleep(20 * time.Millisecond)
+	if code, body := h.do("POST", "/api/projects", "application/json", projectJSON("other", freePort(t), freePort(t))); code != 201 {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	if after := deadline(); !after.Equal(before) {
+		t.Fatalf("idle deadline moved from %v to %v", before, after)
+	}
+}

@@ -38,9 +38,6 @@ type Backend interface {
 	Bus() *events.Bus
 }
 
-// ErrNotFound is returned by the backend for unknown projects.
-var ErrNotFound = errors.New("project not found")
-
 func init() { gin.SetMode(gin.ReleaseMode) }
 
 func Handler(b Backend) http.Handler {
@@ -177,18 +174,28 @@ func decodeProject(c *gin.Context) (config.Project, error) {
 	return p, nil
 }
 
-func (h *handler) update(c *gin.Context, okCode int, fn func([]config.Project) ([]config.Project, error)) {
-	err := h.b.UpdateProjects(fn)
+// errStatus maps backend errors to HTTP status codes.
+func errStatus(err error) int {
 	switch {
-	case errors.Is(err, ErrNotFound):
-		writeErr(c, http.StatusNotFound, err)
-	case err != nil:
-		writeErr(c, http.StatusBadRequest, err)
-	case okCode == http.StatusNoContent:
-		c.Status(okCode)
+	case errors.Is(err, project.ErrNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, config.ErrInvalid):
+		return http.StatusBadRequest
+	case errors.Is(err, project.ErrBusy):
+		return http.StatusConflict
 	default:
-		c.JSON(okCode, h.b.Projects())
+		return http.StatusInternalServerError
 	}
+}
+
+// applyConfig runs a configuration change and reports whether it succeeded,
+// writing the error response when it did not.
+func (h *handler) applyConfig(c *gin.Context, fn func([]config.Project) ([]config.Project, error)) bool {
+	if err := h.b.UpdateProjects(fn); err != nil {
+		writeErr(c, errStatus(err), err)
+		return false
+	}
+	return true
 }
 
 func (h *handler) createProject(c *gin.Context) {
@@ -197,9 +204,9 @@ func (h *handler) createProject(c *gin.Context) {
 		writeErr(c, http.StatusBadRequest, err)
 		return
 	}
-	h.update(c, http.StatusCreated, func(ps []config.Project) ([]config.Project, error) {
-		return append(ps, p), nil
-	})
+	if h.applyConfig(c, func(ps []config.Project) ([]config.Project, error) { return append(ps, p), nil }) {
+		c.JSON(http.StatusCreated, h.b.Projects())
+	}
 }
 
 func indexOf(ps []config.Project, name string) int {
@@ -213,46 +220,47 @@ func (h *handler) updateProject(c *gin.Context) {
 		return
 	}
 	name := c.Param("name")
-	h.update(c, http.StatusOK, func(ps []config.Project) ([]config.Project, error) {
+	ok := h.applyConfig(c, func(ps []config.Project) ([]config.Project, error) {
 		i := indexOf(ps, name)
 		if i < 0 {
-			return nil, ErrNotFound
+			return nil, project.ErrNotFound
 		}
 		ps[i] = p
 		return ps, nil
 	})
+	if ok {
+		c.JSON(http.StatusOK, h.b.Projects())
+	}
 }
 
 func (h *handler) deleteProject(c *gin.Context) {
 	name := c.Param("name")
-	h.update(c, http.StatusNoContent, func(ps []config.Project) ([]config.Project, error) {
+	ok := h.applyConfig(c, func(ps []config.Project) ([]config.Project, error) {
 		i := indexOf(ps, name)
 		if i < 0 {
-			return nil, ErrNotFound
+			return nil, project.ErrNotFound
 		}
 		return slices.Delete(ps, i, i+1), nil
 	})
-}
-
-func (h *handler) control(c *gin.Context, err error) {
-	switch {
-	case errors.Is(err, ErrNotFound):
-		writeErr(c, http.StatusNotFound, err)
-	case errors.Is(err, project.ErrBusy):
-		writeErr(c, http.StatusConflict, err)
-	case err != nil:
-		writeErr(c, http.StatusInternalServerError, err)
-	default:
-		c.Status(http.StatusAccepted)
+	if ok {
+		c.Status(http.StatusNoContent)
 	}
 }
 
+func respondAccepted(c *gin.Context, err error) {
+	if err != nil {
+		writeErr(c, errStatus(err), err)
+		return
+	}
+	c.Status(http.StatusAccepted)
+}
+
 func (h *handler) startProject(c *gin.Context) {
-	h.control(c, h.b.StartProject(c.Param("name")))
+	respondAccepted(c, h.b.StartProject(c.Param("name")))
 }
 
 func (h *handler) stopProject(c *gin.Context) {
-	h.control(c, h.b.StopProject(c.Param("name")))
+	respondAccepted(c, h.b.StopProject(c.Param("name")))
 }
 
 func (h *handler) exportYAML(c *gin.Context) {
@@ -276,5 +284,7 @@ func (h *handler) importYAML(c *gin.Context) {
 		writeErr(c, http.StatusBadRequest, fmt.Errorf("invalid YAML: %w", err))
 		return
 	}
-	h.update(c, http.StatusOK, func([]config.Project) ([]config.Project, error) { return ps, nil })
+	if h.applyConfig(c, func([]config.Project) ([]config.Project, error) { return ps, nil }) {
+		c.JSON(http.StatusOK, h.b.Projects())
+	}
 }

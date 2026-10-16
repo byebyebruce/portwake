@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -51,7 +52,13 @@ CREATE TABLE IF NOT EXISTS stats_hourly (
 );
 `
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db *sql.DB
+
+	errMu   sync.Mutex
+	dropped int
+	lastErr error
+}
 
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
@@ -134,9 +141,13 @@ func (s *Store) Consume(ch <-chan events.Event) {
 	}
 }
 
+// write stores a batch in one transaction. An event that fails to insert is
+// skipped (via a savepoint) instead of losing the batch; errors are counted
+// and the last one is kept for WriteErrors.
 func (s *Store) write(batch []events.Event) {
 	tx, err := s.db.Begin()
 	if err != nil {
+		s.noteErr(err, len(batch))
 		return
 	}
 	defer tx.Rollback()
@@ -144,16 +155,44 @@ func (s *Store) write(batch []events.Event) {
 		if !Persisted(e.Type) {
 			continue
 		}
-		b, _ := json.Marshal(e)
-		if _, err := tx.Exec(`INSERT INTO events(ts, project, port, type, data) VALUES (?, ?, ?, ?, ?)`,
-			e.Time.UnixMilli(), e.Project, e.Port, e.Type, string(b)); err != nil {
-			return
-		}
-		if err := addStats(tx, e); err != nil {
-			return
+		if err := writeOne(tx, e); err != nil {
+			s.noteErr(err, 1)
 		}
 	}
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		s.noteErr(err, len(batch))
+	}
+}
+
+func writeOne(tx *sql.Tx, e events.Event) error {
+	if _, err := tx.Exec(`SAVEPOINT ev`); err != nil {
+		return err
+	}
+	b, _ := json.Marshal(e)
+	_, err := tx.Exec(`INSERT INTO events(ts, project, port, type, data) VALUES (?, ?, ?, ?, ?)`,
+		e.Time.UnixMilli(), e.Project, e.Port, e.Type, string(b))
+	if err == nil {
+		err = addStats(tx, e)
+	}
+	if err != nil {
+		tx.Exec(`ROLLBACK TO ev`)
+	}
+	tx.Exec(`RELEASE ev`)
+	return err
+}
+
+func (s *Store) noteErr(err error, n int) {
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	s.dropped += n
+	s.lastErr = err
+}
+
+// WriteErrors reports how many events failed to persist and the last error.
+func (s *Store) WriteErrors() (int, error) {
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	return s.dropped, s.lastErr
 }
 
 func addStats(tx *sql.Tx, e events.Event) error {
@@ -273,6 +312,16 @@ type ProjectStats struct {
 	Totals
 	AvgStartMs int64        `json:"avg_start_ms"`
 	Series     []HourBucket `json:"series"`
+	Ports      []PortTotals `json:"ports"`
+}
+
+// PortTotals is the traffic of one entry port over the range.
+type PortTotals struct {
+	Port     int   `json:"port"`
+	Conns    int64 `json:"conns"`
+	Requests int64 `json:"requests"`
+	BytesIn  int64 `json:"bytes_in"`
+	BytesOut int64 `json:"bytes_out"`
 }
 
 type HourBucket struct {
@@ -307,7 +356,7 @@ func (s *Store) Stats(project string, from, to time.Time) ([]ProjectStats, error
 		if !ok {
 			i = len(out)
 			idx[name] = i
-			out = append(out, ProjectStats{Project: name, Series: []HourBucket{}})
+			out = append(out, ProjectStats{Project: name, Series: []HourBucket{}, Ports: []PortTotals{}})
 		}
 		ps := &out[i]
 		ps.Series = append(ps.Series, b)
@@ -321,12 +370,38 @@ func (s *Store) Stats(project string, from, to time.Time) ([]ProjectStats, error
 		t.StartMs += b.StartMs
 		t.RuntimeMs += b.RuntimeMs
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
 	for i := range out {
 		if out[i].Starts > 0 {
 			out[i].AvgStartMs = out[i].StartMs / out[i].Starts
 		}
 	}
-	return out, rows.Err()
+
+	pq := `SELECT project, port, SUM(conns), SUM(requests), SUM(bytes_in), SUM(bytes_out)
+		FROM stats_hourly WHERE port > 0 AND hour >= ? AND hour < ?`
+	if project != "" {
+		pq += ` AND project = ?`
+	}
+	pq += ` GROUP BY project, port ORDER BY project, port`
+	prows, err := s.db.Query(pq, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer prows.Close()
+	for prows.Next() {
+		var name string
+		var pt PortTotals
+		if err := prows.Scan(&name, &pt.Port, &pt.Conns, &pt.Requests, &pt.BytesIn, &pt.BytesOut); err != nil {
+			return nil, err
+		}
+		if i, ok := idx[name]; ok {
+			out[i].Ports = append(out[i].Ports, pt)
+		}
+	}
+	return out, prows.Err()
 }
 
 // Prune deletes data past its retention.

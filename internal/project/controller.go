@@ -26,8 +26,12 @@ const (
 	Stopping State = "stopping"
 )
 
-// ErrBusy is returned by manual operations that conflict with a transition.
-var ErrBusy = errors.New("project is busy")
+var (
+	// ErrBusy is returned by manual operations that conflict with a transition.
+	ErrBusy = errors.New("project is busy")
+	// ErrNotFound is returned for projects that are not configured.
+	ErrNotFound = errors.New("project not found")
+)
 
 // Tuning holds timings shared by all controllers.
 type Tuning struct {
@@ -109,8 +113,9 @@ func (c *Controller) Config() config.Project {
 func (c *Controller) UpdateConfig(cfg config.Project) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	idleChanged := cfg.Idle() != c.cfg.Idle()
 	c.cfg = cfg
-	if c.state == Running && c.conns == 0 {
+	if idleChanged && c.state == Running && c.conns == 0 {
 		c.armIdleLocked()
 	}
 }
@@ -220,10 +225,7 @@ func (c *Controller) Reconcile(ctx context.Context) {
 	switch {
 	case c.state == Stopped && running:
 		c.runningSince = time.Now()
-		c.setStateLocked(Running)
-		if c.conns == 0 {
-			c.armIdleLocked()
-		}
+		c.enterRunningLocked()
 	case c.state == Running && !running:
 		c.cancelIdleLocked()
 		c.publish(events.Event{Type: events.StopDone, Reason: events.ReasonExternal, DurationMs: c.uptimeMs()})
@@ -286,10 +288,7 @@ func (c *Controller) runStart(a *attempt, cfg config.Project, trigger string) {
 	c.lastErr = ""
 	c.runningSince = time.Now()
 	c.publish(events.Event{Type: events.StartOK, Trigger: trigger, DurationMs: time.Since(t0).Milliseconds()})
-	c.setStateLocked(Running)
-	if c.conns == 0 {
-		c.armIdleLocked()
-	}
+	c.enterRunningLocked()
 }
 
 // waitReady waits until every route is ready: its health_service reports
@@ -385,18 +384,18 @@ func (c *Controller) stopLocked(reason string) {
 }
 
 func (c *Controller) runStop(cfg config.Project, reason string) {
-	err := c.runner.Stop(context.Background(), cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.StartLimit())
+	defer cancel()
+	err := c.runner.Stop(ctx, cfg)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err != nil {
 		c.lastErr = err.Error()
 		c.publish(events.Event{Type: events.Error, Message: "stop failed", Error: err.Error()})
-		c.setStateLocked(Running)
-		if c.conns == 0 && c.pendingStart == "" {
-			c.armIdleLocked()
-		}
+		// The containers are most likely still up; go back to running.
 		c.pendingStart = ""
+		c.enterRunningLocked()
 		return
 	}
 	c.publish(events.Event{Type: events.StopDone, Reason: reason, DurationMs: c.uptimeMs()})
@@ -405,6 +404,15 @@ func (c *Controller) runStop(cfg config.Project, reason string) {
 	if t := c.pendingStart; t != "" {
 		c.pendingStart = ""
 		c.startLocked(t)
+	}
+}
+
+// enterRunningLocked moves to Running and starts the idle countdown when
+// nothing is connected.
+func (c *Controller) enterRunningLocked() {
+	c.setStateLocked(Running)
+	if c.conns == 0 {
+		c.armIdleLocked()
 	}
 }
 

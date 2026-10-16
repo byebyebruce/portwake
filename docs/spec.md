@@ -148,7 +148,7 @@ stopped  --(核对发现在跑)-->         running   (立即开始空闲计时)
 ### 就绪判断
 
 - 如果 route 指定了 `health_service`，并且该 service 有 compose healthcheck：轮询 `Ps`，直到它变成 `healthy`。
-- 否则：对该项目每条 route 的 upstream 做 TCP 拨号探测，全部能连上才算就绪。
+- 否则探测 upstream：`http` 路由要求返回任意 HTTP 响应；`tcp` 路由要求连接保持打开约 150ms（或收到数据）。原因是 Docker 的端口代理会在容器内服务还没监听时就接受连接，然后立刻关闭，单纯拨号成功不能说明服务已就绪。
 - 总时长受 `start_timeout` 约束（默认 3 分钟）。
 
 ### 配置模型
@@ -174,6 +174,8 @@ stopped  --(核对发现在跑)-->         running   (立即开始空闲计时)
 - 清理任务定期运行。
 
 ### Web API（JSON）
+
+- 使用 gin 框架实现。
 
 - 项目的增删改查，路由作为项目的子资源。写操作返回校验或监听错误。
 - 对项目执行启动或停止操作。

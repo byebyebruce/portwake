@@ -49,15 +49,17 @@ type Server struct {
 	cancel context.CancelFunc
 
 	mu      sync.Mutex
+	closing bool
 	entries map[int]*entry
-	httpSrv []*http.Server // every http server ever started; retired ones may still hold conns
+	httpSrv map[*http.Server]struct{} // live and retired servers still holding conns
 	conns   map[net.Conn]struct{}
-	connWG  sync.WaitGroup
+	connWG  sync.WaitGroup // TCP connections and upgraded HTTP connections
 }
 
 func New(bus *events.Bus, lookup Lookup) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Server{bus: bus, lookup: lookup, ctx: ctx, cancel: cancel, entries: map[int]*entry{}, conns: map[net.Conn]struct{}{}}
+	return &Server{bus: bus, lookup: lookup, ctx: ctx, cancel: cancel, entries: map[int]*entry{},
+		httpSrv: map[*http.Server]struct{}{}, conns: map[net.Conn]struct{}{}}
 }
 
 // Apply makes the listeners match the routes of projects. Either every
@@ -84,6 +86,13 @@ func (s *Server) Apply(projects []config.Project) error {
 		e.ln.Close()
 		delete(s.entries, e.port)
 	}
+	defer func() {
+		for _, e := range toClose {
+			if e.srv != nil {
+				go s.retire(e.srv)
+			}
+		}
+	}()
 	var opened []*entry
 	var openErr error
 	for port, t := range want {
@@ -102,6 +111,9 @@ func (s *Server) Apply(projects []config.Project) error {
 		for _, e := range opened {
 			e.ln.Close()
 			delete(s.entries, e.port)
+			if e.srv != nil {
+				go s.retire(e.srv)
+			}
 		}
 		for _, e := range toClose {
 			if re, err := s.open(*e.target.Load()); err == nil {
@@ -110,7 +122,7 @@ func (s *Server) Apply(projects []config.Project) error {
 				s.bus.Publish(events.Event{Type: events.Error, Port: e.port, Message: "restore listener", Error: err.Error()})
 			}
 		}
-		return openErr
+		return fmt.Errorf("%w: %w", config.ErrInvalid, openErr)
 	}
 	for port, t := range want {
 		t := t
@@ -129,7 +141,7 @@ func (s *Server) open(t target) (*entry, error) {
 	e.target.Store(&t)
 	if r.Mode == config.ModeHTTP {
 		e.srv = &http.Server{Handler: s.httpHandler(e), ReadHeaderTimeout: 30 * time.Second}
-		s.httpSrv = append(s.httpSrv, e.srv)
+		s.httpSrv[e.srv] = struct{}{}
 		go e.srv.Serve(ln)
 	} else {
 		go s.acceptTCP(e)
@@ -137,15 +149,28 @@ func (s *Server) open(t target) (*entry, error) {
 	return e, nil
 }
 
+// retire lets a closed http listener's server finish its in-flight requests
+// and then forgets it. Idle keep-alive connections are closed.
+func (s *Server) retire(srv *http.Server) {
+	srv.Shutdown(s.ctx)
+	s.mu.Lock()
+	delete(s.httpSrv, srv)
+	s.mu.Unlock()
+}
+
 // Shutdown closes all listeners, waits for active connections until ctx is
 // done and then force-closes the rest.
 func (s *Server) Shutdown(ctx context.Context) {
 	s.mu.Lock()
+	s.closing = true
 	for port, e := range s.entries {
 		e.ln.Close()
 		delete(s.entries, port)
 	}
-	servers := s.httpSrv
+	servers := make([]*http.Server, 0, len(s.httpSrv))
+	for srv := range s.httpSrv {
+		servers = append(servers, srv)
+	}
 	s.mu.Unlock()
 
 	var wg sync.WaitGroup
@@ -174,6 +199,17 @@ func (s *Server) Shutdown(ctx context.Context) {
 	wg.Wait()
 }
 
+// begin registers an active connection unless shutting down.
+func (s *Server) begin() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closing {
+		return false
+	}
+	s.connWG.Add(1)
+	return true
+}
+
 func (s *Server) track(c net.Conn) {
 	s.mu.Lock()
 	s.conns[c] = struct{}{}
@@ -195,7 +231,10 @@ func (s *Server) acceptTCP(e *entry) {
 			}
 			return
 		}
-		s.connWG.Add(1)
+		if !s.begin() {
+			c.Close()
+			return
+		}
 		go s.handleTCP(e, c)
 	}
 }
@@ -264,6 +303,23 @@ func (s *Server) httpHandler(e *entry) http.Handler {
 		},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Upgraded connections are hijacked and invisible to http.Server
+		// Shutdown; track them like TCP connections so they get the grace
+		// period, and cancel them (ReverseProxy then closes both ends) on
+		// force-close.
+		if r.Header.Get("Upgrade") != "" {
+			if !s.begin() {
+				http.Error(w, "dcpentry: shutting down", http.StatusServiceUnavailable)
+				return
+			}
+			defer s.connWG.Done()
+		}
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		stop := context.AfterFunc(s.ctx, cancel)
+		defer stop()
+		r = r.WithContext(ctx)
+
 		t := e.target.Load()
 		t0 := time.Now()
 		cw := &countingWriter{ResponseWriter: w}

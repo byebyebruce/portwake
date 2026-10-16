@@ -15,7 +15,7 @@ const (
 	LevelError
 )
 
-func ms(n int64) string {
+func millis(n int64) string {
 	return (time.Duration(n) * time.Millisecond).Round(time.Millisecond).String()
 }
 
@@ -25,23 +25,23 @@ func Describe(e Event) (Level, string) {
 	case ConnOpen:
 		return LevelDebug, fmt.Sprintf(":%d connection from %s", e.Port, e.Remote)
 	case ConnClose:
-		return LevelDebug, fmt.Sprintf(":%d connection closed (in %dB, out %dB, %s)", e.Port, e.BytesIn, e.BytesOut, ms(e.DurationMs))
+		return LevelDebug, fmt.Sprintf(":%d connection closed (in %dB, out %dB, %s)", e.Port, e.BytesIn, e.BytesOut, millis(e.DurationMs))
 	case HTTPRequest:
 		lvl := LevelInfo
 		if e.Status >= 500 {
 			lvl = LevelWarn
 		}
-		return lvl, fmt.Sprintf(":%d %s %s → %d (%s)", e.Port, e.Method, e.Path, e.Status, ms(e.DurationMs))
+		return lvl, fmt.Sprintf(":%d %s %s → %d (%s)", e.Port, e.Method, e.Path, e.Status, millis(e.DurationMs))
 	case StartBegin:
 		return LevelInfo, fmt.Sprintf("starting (triggered by %s)", e.Trigger)
 	case StartOK:
-		return LevelInfo, fmt.Sprintf("ready in %s", ms(e.DurationMs))
+		return LevelInfo, fmt.Sprintf("ready in %s", millis(e.DurationMs))
 	case StartFail:
-		return LevelError, fmt.Sprintf("start failed after %s: %s", ms(e.DurationMs), e.Error)
+		return LevelError, fmt.Sprintf("start failed after %s: %s", millis(e.DurationMs), e.Error)
 	case StopBegin:
 		return LevelInfo, fmt.Sprintf("stopping (%s)", e.Reason)
 	case StopDone:
-		return LevelInfo, fmt.Sprintf("stopped (%s) after running %s", e.Reason, ms(e.DurationMs))
+		return LevelInfo, fmt.Sprintf("stopped (%s) after running %s", e.Reason, millis(e.DurationMs))
 	case ConfigChange:
 		return LevelInfo, "configuration applied: " + e.Message
 	case Error:

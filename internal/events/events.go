@@ -22,6 +22,9 @@ const (
 	State = "state"
 )
 
+// TriggerManual is the start trigger for manual starts (web / TUI).
+const TriggerManual = "manual"
+
 // Stop reasons.
 const (
 	ReasonIdle     = "idle"

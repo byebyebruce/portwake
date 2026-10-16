@@ -131,33 +131,47 @@ func (a *App) Start(ctx context.Context) error {
 	a.bgCancel = bgCancel
 	a.bgWG.Add(2)
 	go func() { defer a.bgWG.Done(); a.mgr.Run(bg, a.opts.ReconcileInterval) }()
-	go func() { defer a.bgWG.Done(); a.pruneLoop(bg) }()
+	go func() { defer a.bgWG.Done(); a.maintain(bg) }()
 	return nil
 }
 
-func (a *App) pruneLoop(ctx context.Context) {
-	t := time.NewTicker(time.Hour)
-	defer t.Stop()
-	a.store.Prune(time.Now())
+// maintain prunes old data hourly and reports event-write failures once a
+// minute (reporting from the store itself could loop on a broken database).
+func (a *App) maintain(ctx context.Context) {
+	tick := time.NewTicker(time.Minute)
+	defer tick.Stop()
+	lastPrune, reported := time.Time{}, 0
 	for {
+		if time.Since(lastPrune) >= time.Hour {
+			if err := a.store.Prune(time.Now()); err != nil {
+				a.bus.Publish(events.Event{Type: events.Error, Message: "prune old data", Error: err.Error()})
+			}
+			lastPrune = time.Now()
+		}
+		if n, err := a.store.WriteErrors(); n > reported {
+			a.bus.Publish(events.Event{Type: events.Error, Message: fmt.Sprintf("%d events failed to persist", n-reported), Error: err.Error()})
+			reported = n
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
-			a.store.Prune(time.Now())
+		case <-tick.C:
 		}
 	}
 }
 
-func (a *App) closeStore() {
+func (a *App) closeStore() error {
 	a.storeStop()
 	<-a.storeDone
-	a.store.Close()
+	return a.store.Close()
 }
 
 // Shutdown closes the entry listeners, waits up to Grace for connections,
 // stops the web server and flushes the store. Projects are left running.
 func (a *App) Shutdown(ctx context.Context) error {
+	if a.web == nil {
+		return errors.New("not started")
+	}
 	grace, cancel := context.WithTimeout(ctx, a.opts.Grace)
 	defer cancel()
 	a.proxy.Shutdown(grace)
@@ -168,8 +182,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 	if a.web.Shutdown(wctx) != nil {
 		a.web.Close()
 	}
-	a.closeStore()
-	return nil
+	return a.closeStore()
 }
 
 func (a *App) WebAddr() string               { return a.webAddr }
@@ -194,31 +207,51 @@ func (a *App) UpdateProjects(fn func([]config.Project) ([]config.Project, error)
 	if err := config.Validate(projects); err != nil {
 		return err
 	}
+	// Controllers for new projects exist before their listeners open, and
+	// removed projects keep theirs until the listeners are gone, so no
+	// connection ever sees an unknown project and a rollback loses nothing.
+	ctx := context.Background()
+	a.mgr.Apply(ctx, withRemoved(projects, a.projects))
 	if err := a.proxy.Apply(projects); err != nil {
+		a.mgr.Apply(ctx, a.projects)
 		return err
 	}
 	if err := a.store.ReplaceProjects(projects); err != nil {
-		a.proxy.Apply(a.projects)
+		if rerr := a.proxy.Apply(a.projects); rerr != nil {
+			a.bus.Publish(events.Event{Type: events.Error, Message: "restore listeners", Error: rerr.Error()})
+		}
+		a.mgr.Apply(ctx, a.projects)
 		return fmt.Errorf("save config: %w", err)
 	}
-	a.mgr.Apply(context.Background(), projects)
+	a.mgr.Apply(ctx, projects)
 	a.projects = projects
 	a.bus.Publish(events.Event{Type: events.ConfigChange, Message: fmt.Sprintf("%d projects", len(projects))})
 	return nil
 }
 
+// withRemoved returns next plus the projects of prev that next drops.
+func withRemoved(next, prev []config.Project) []config.Project {
+	out := slices.Clone(next)
+	for _, p := range prev {
+		if !slices.ContainsFunc(next, func(n config.Project) bool { return n.Name == p.Name }) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func (a *App) StartProject(name string) error {
 	c := a.mgr.Get(name)
 	if c == nil {
-		return web.ErrNotFound
+		return project.ErrNotFound
 	}
-	return c.Start("manual")
+	return c.Start(events.TriggerManual)
 }
 
 func (a *App) StopProject(name string) error {
 	c := a.mgr.Get(name)
 	if c == nil {
-		return web.ErrNotFound
+		return project.ErrNotFound
 	}
 	return c.Stop(events.ReasonManual)
 }

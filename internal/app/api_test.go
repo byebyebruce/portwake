@@ -223,12 +223,18 @@ func TestStatsSummarizeStartsAndTraffic(t *testing.T) {
 			Hour  int64 `json:"hour"`
 			Conns int64 `json:"conns"`
 		} `json:"series"`
+		Ports []struct {
+			Port    int   `json:"port"`
+			Conns   int64 `json:"conns"`
+			BytesIn int64 `json:"bytes_in"`
+		} `json:"ports"`
 	}
 	eventually(t, "stats", func() bool {
 		var rows []stats
 		h.getJSON("/api/stats", &rows)
 		return len(rows) == 1 && rows[0].Starts == 1 && rows[0].AvgStartMs >= 50 &&
-			rows[0].Conns == 3 && rows[0].BytesIn == 18 && rows[0].BytesOut == 18 && len(rows[0].Series) == 1
+			rows[0].Conns == 3 && rows[0].BytesIn == 18 && rows[0].BytesOut == 18 && len(rows[0].Series) == 1 &&
+			len(rows[0].Ports) == 1 && rows[0].Ports[0].Port == entry && rows[0].Ports[0].Conns == 3 && rows[0].Ports[0].BytesIn == 18
 	})
 }
 
