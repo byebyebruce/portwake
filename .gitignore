@@ -1,0 +1,4 @@
+/dcpentry
+*.db
+*.db-shm
+*.db-wal
