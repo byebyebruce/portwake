@@ -194,7 +194,7 @@ stopped  --(核对发现在跑)-->         running   (立即开始空闲计时)
 
 ### CLI
 
-- 根命令启动服务。参数：`--db`（默认 `./portwake.db`）、`--web`（默认 `127.0.0.1:9000`）、`--config <yaml>`（文件模式）、`--import <yaml>`（仅 db 模式）、`--tui`、`--grace`（默认 10 秒）。
+- 根命令启动服务。参数：`--db`（默认 `./portwake.db`）、`--web`（默认 `127.0.0.1:9000`）、`--config <yaml>`（文件模式）、`--import <yaml>`（仅 db 模式）、`--tui`、`--grace`（默认 10 秒）、`--version`。
 - `docker` 从 PATH 中查找。
 - 未开启 TUI 时，日志用 charm log 输出到 stderr；开启 TUI 时，日志只进入 TUI 的事件面板。
 
@@ -237,4 +237,5 @@ stopped  --(核对发现在跑)-->         running   (立即开始空闲计时)
 - 由于配置里的项目全部被接管，所以手动启动的项目也会在空闲后被停掉。不想被停的项目把 `idle_timeout` 设为 0。
 - macOS 下用的是 Docker Desktop 或兼容的运行时，`docker compose` v2 必须可用。
 - 仓库提供 `Dockerfile`、`docker-compose.yaml` 和 GitHub Actions 镜像构建；容器内运行时同样需要宿主机 `docker compose` v2。
+- 推送 `v*` tag 时，GitHub Actions 会交叉编译 Linux / macOS 的 amd64 / arm64 二进制并创建 Release，附带校验和文件。
 - 后续可以考虑的功能：容器日志查看、启动等待页、按 Host 路由、按 cron 停止。

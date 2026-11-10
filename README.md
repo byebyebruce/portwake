@@ -24,6 +24,22 @@ go build -o portwake ./cmd/portwake
 
 `docker` 需要在 PATH 中，并且支持 compose v2。
 
+## 安装
+
+不想自己编译时，从 [GitHub Releases](https://github.com/byebyebruce/portwake/releases) 下载对应平台的压缩包（Linux / macOS，amd64 / arm64）：
+
+```sh
+tar -xzf portwake_<version>_linux_amd64.tar.gz
+./portwake --version
+```
+
+发布流程由 `.github/workflows/release.yml` 完成：推送 `v*` tag 时自动交叉编译并创建 Release，同时生成 `checksums.txt`。
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## Docker
 
 仓库包含 `Dockerfile` 和 `docker-compose.yaml`，镜像内自带 `docker` / `docker compose` CLI：

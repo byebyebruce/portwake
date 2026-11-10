@@ -19,6 +19,8 @@ import (
 	"portwake/internal/tui"
 )
 
+var version = "dev"
+
 func main() {
 	var (
 		dbPath   string
@@ -31,6 +33,7 @@ func main() {
 	)
 	root := &cobra.Command{
 		Use:          "portwake",
+		Version:      version,
 		Short:        "On-demand traffic entry for docker compose projects",
 		Long:         "portwake listens on entry ports, starts the matching docker compose project on the first connection, forwards traffic once it is ready and stops it again when idle.",
 		SilenceUsage: true,
