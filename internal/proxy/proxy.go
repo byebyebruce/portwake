@@ -131,9 +131,28 @@ func (s *Server) Apply(projects []config.Project) error {
 	return nil
 }
 
+// listenNetwork picks an explicit address family for the bind IP. With the
+// generic "tcp" network, Go treats 0.0.0.0 as a wildcard and may create a
+// dual-stack [::] socket, so a supposed IPv4 bind can end up IPv6-only on
+// systems where IPv4-mapped connections do not work.
+func listenNetwork(bind string) string {
+	if bind == "" {
+		bind = config.DefaultBind
+	}
+	ip := net.ParseIP(bind)
+	switch {
+	case ip == nil:
+		return "tcp"
+	case ip.To4() != nil:
+		return "tcp4"
+	default:
+		return "tcp6"
+	}
+}
+
 func (s *Server) open(t target) (*entry, error) {
 	r := t.route
-	ln, err := net.Listen("tcp", net.JoinHostPort(r.Bind, fmt.Sprint(r.Listen)))
+	ln, err := net.Listen(listenNetwork(r.Bind), net.JoinHostPort(r.Bind, fmt.Sprint(r.Listen)))
 	if err != nil {
 		return nil, fmt.Errorf("listen on port %d: %w", r.Listen, err)
 	}
