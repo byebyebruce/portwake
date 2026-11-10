@@ -13,25 +13,34 @@ import (
 	"testing"
 	"time"
 
-	"dcpentry/internal/app"
-	"dcpentry/internal/compose/composetest"
+	"portwake/internal/app"
+	"portwake/internal/compose/composetest"
 )
 
 type harness struct {
-	t      *testing.T
-	fake   *composetest.Fake
-	app    *app.App
-	db     string
-	cancel context.CancelFunc
-	done   chan error
+	t          *testing.T
+	fake       *composetest.Fake
+	app        *app.App
+	db         string
+	configPath string
+	cancel     context.CancelFunc
+	done       chan error
 }
 
-// start boots a full dcpentry with a fake compose runner and the given YAML
+// start boots a full portwake with a fake compose runner and the given YAML
 // imported as the initial configuration.
 func start(t *testing.T, yaml string) *harness {
 	t.Helper()
-	h := &harness{t: t, fake: composetest.New(), db: filepath.Join(t.TempDir(), "dcpentry.db")}
+	h := &harness{t: t, fake: composetest.New(), db: filepath.Join(t.TempDir(), "portwake.db")}
 	h.boot(yaml)
+	return h
+}
+
+// startFile boots portwake in file mode, with path as the live configuration.
+func startFile(t *testing.T, path string) *harness {
+	t.Helper()
+	h := &harness{t: t, fake: composetest.New(), db: filepath.Join(t.TempDir(), "portwake.db"), configPath: path}
+	h.boot("")
 	return h
 }
 
@@ -45,7 +54,9 @@ func (h *harness) boot(yaml string) {
 		ReconcileInterval:  30 * time.Millisecond,
 		HealthPollInterval: 10 * time.Millisecond,
 	}
-	if yaml != "" {
+	if h.configPath != "" {
+		opts.ConfigPath = h.configPath
+	} else if yaml != "" {
 		opts.Import = []byte(yaml)
 	}
 	a, err := app.New(opts)

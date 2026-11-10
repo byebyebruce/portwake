@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"dcpentry/internal/config"
+	"portwake/internal/config"
 )
 
 // CLI runs the `docker compose` command found on PATH.

@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"dcpentry/internal/compose"
-	"dcpentry/internal/config"
-	"dcpentry/internal/events"
+	"portwake/internal/compose"
+	"portwake/internal/config"
+	"portwake/internal/events"
 )
 
 // Manager holds one Controller per configured project and periodically

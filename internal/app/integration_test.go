@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"dcpentry/internal/app"
-	"dcpentry/internal/compose"
+	"portwake/internal/app"
+	"portwake/internal/compose"
 )
 
 // TestRealComposeLifecycle drives a real nginx compose project:
@@ -23,7 +23,7 @@ import (
 func TestRealComposeLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	entry, up := freePort(t), freePort(t)
-	name := fmt.Sprintf("dcpentry-it-%d", time.Now().UnixNano()%100000)
+	name := fmt.Sprintf("portwake-it-%d", time.Now().UnixNano()%100000)
 	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(fmt.Sprintf(`services:
   web:
     image: nginx:alpine

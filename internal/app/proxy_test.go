@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"dcpentry/internal/compose/composetest"
-	cfgpkg "dcpentry/internal/config"
+	"portwake/internal/compose/composetest"
+	cfgpkg "portwake/internal/config"
 )
 
 func TestTCPConnectionStartsStoppedProjectAndForwards(t *testing.T) {

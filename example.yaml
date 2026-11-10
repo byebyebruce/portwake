@@ -1,0 +1,54 @@
+# portwake 配置示例
+#
+# 使用方式：
+#   ./portwake --config example.yaml   # 文件模式：本文件就是配置源，Web 修改写回这里
+#   ./portwake --import example.yaml   # db 模式：启动时导入 SQLite，之后不再读本文件
+# 也可以在 Web 页面的「导入导出」标签页上传，或 PUT /api/config.yaml。
+#
+# 文件模式下 Web 修改会重写本文件，手写注释不会保留。
+#
+# 注意：
+#   - 后端 compose 项目必须自己把端口发布到宿主机（例如
+#     ports: ["127.0.0.1:18080:80"]），且 upstream 不能和入口 listen 冲突。
+#   - 项目名必须匹配 [a-z0-9][a-z0-9_-]*，入口端口全局唯一。
+#   - 下面的 dir、端口都是示例值，使用前请改成实际路径和端口。
+
+projects:
+  # Web 服务：HTTP 转发，等 compose healthcheck 就绪后再放流量
+  - name: blog
+    dir: /srv/blog
+    files: [compose.yaml]          # 可选；默认按 compose 规则查找
+    env_file: .env                 # 可选
+    profiles: []                   # 可选
+    idle_timeout: 15m              # 默认 15m；0 表示永不自动停止
+    start_timeout: 3m              # 默认 3m
+    routes:
+      - listen: 8080               # 入口端口
+        bind: 0.0.0.0              # 默认 0.0.0.0；只能填 IP
+        mode: http                 # http 会记录请求日志和统计
+        upstream: 127.0.0.1:18080
+        health_service: app        # 可选：等该 service 的 healthcheck 变为 healthy
+      # 同一项目可以挂多个入口，共享启停状态
+      - listen: 8081
+        bind: 127.0.0.1
+        mode: http
+        upstream: 127.0.0.1:18080
+
+  # TCP 服务：任意协议透传，例如 Redis、MySQL、SSH
+  - name: cache
+    dir: /srv/cache
+    idle_timeout: 5m
+    routes:
+      - listen: 6380
+        bind: 127.0.0.1
+        mode: tcp                  # 默认就是 tcp
+        upstream: 127.0.0.1:16379
+
+  # 常驻服务：空闲也不自动停止
+  - name: db
+    dir: /srv/db
+    idle_timeout: 0
+    routes:
+      - listen: 15432
+        bind: 127.0.0.1
+        upstream: 127.0.0.1:15433

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	cfgpkg "dcpentry/internal/config"
+	cfgpkg "portwake/internal/config"
 )
 
 func TestIdleProjectIsStoppedAfterIdleTimeout(t *testing.T) {

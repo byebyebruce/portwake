@@ -11,9 +11,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"dcpentry/internal/config"
-	"dcpentry/internal/events"
-	"dcpentry/internal/project"
+	"portwake/internal/config"
+	"portwake/internal/events"
+	"portwake/internal/project"
 )
 
 // Backend is what the dashboard needs from the application.
@@ -219,7 +219,7 @@ func (m *model) View() string {
 		return "loading…"
 	}
 	inner := max(20, m.width-4)
-	header := titleStyle.Render("dcpentry") + dimStyle.Render("  web http://"+m.webAddr)
+	header := titleStyle.Render("portwake") + dimStyle.Render("  web http://"+m.webAddr)
 
 	rows := []string{headStyle.Render(pad("PROJECT", 20) + pad("STATE", 11) + pad("PORTS", 24) + pad("CONNS", 7) + pad("UPTIME", 10) + "IDLE IN")}
 	for i, s := range m.snaps {

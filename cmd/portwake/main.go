@@ -1,4 +1,4 @@
-// Command dcpentry is an on-demand traffic entry for docker compose projects.
+// Command portwake is an on-demand traffic entry for docker compose projects.
 package main
 
 import (
@@ -13,10 +13,10 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 
-	"dcpentry/internal/app"
-	"dcpentry/internal/compose"
-	"dcpentry/internal/events"
-	"dcpentry/internal/tui"
+	"portwake/internal/app"
+	"portwake/internal/compose"
+	"portwake/internal/events"
+	"portwake/internal/tui"
 )
 
 func main() {
@@ -24,21 +24,25 @@ func main() {
 		dbPath   string
 		webAddr  string
 		importF  string
+		configF  string
 		useTUI   bool
 		grace    time.Duration
 		logLevel string
 	)
 	root := &cobra.Command{
-		Use:          "dcpentry",
+		Use:          "portwake",
 		Short:        "On-demand traffic entry for docker compose projects",
-		Long:         "dcpentry listens on entry ports, starts the matching docker compose project on the first connection, forwards traffic once it is ready and stops it again when idle.",
+		Long:         "portwake listens on entry ports, starts the matching docker compose project on the first connection, forwards traffic once it is ready and stops it again when idle.",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			docker, err := exec.LookPath("docker")
 			if err != nil {
 				return fmt.Errorf("docker not found on PATH: %w", err)
 			}
-			opts := app.Options{DBPath: dbPath, WebAddr: webAddr, Runner: compose.CLI{Docker: docker}, Grace: grace}
+			if configF != "" && importF != "" {
+				return fmt.Errorf("--config and --import cannot be used together")
+			}
+			opts := app.Options{DBPath: dbPath, WebAddr: webAddr, Runner: compose.CLI{Docker: docker}, Grace: grace, ConfigPath: configF}
 			if importF != "" {
 				b, err := os.ReadFile(importF)
 				if err != nil {
@@ -54,9 +58,10 @@ func main() {
 		},
 	}
 	f := root.Flags()
-	f.StringVar(&dbPath, "db", "dcpentry.db", "SQLite database path")
+	f.StringVar(&dbPath, "db", "portwake.db", "SQLite database for events and stats (and configuration in db mode)")
 	f.StringVar(&webAddr, "web", "127.0.0.1:9000", "web UI listen address")
-	f.StringVar(&importF, "import", "", "YAML file replacing the stored configuration at start")
+	f.StringVar(&importF, "import", "", "YAML file replacing the stored configuration at start (db mode)")
+	f.StringVar(&configF, "config", "", "YAML file used as the live configuration; web edits are written back to it")
 	f.BoolVar(&useTUI, "tui", false, "show the terminal dashboard instead of logs")
 	f.DurationVar(&grace, "grace", 10*time.Second, "how long to wait for connections on shutdown")
 	f.StringVar(&logLevel, "log-level", "info", "log level when not using --tui (debug, info, warn, error)")
@@ -84,7 +89,7 @@ func run(opts app.Options, useTUI bool, logger *log.Logger) error {
 	if useTUI {
 		err = tui.Run(ctx, a, a.WebAddr())
 	} else {
-		logger.Info("dcpentry started", "web", "http://"+a.WebAddr(), "projects", len(a.Projects()))
+		logger.Info("portwake started", "web", "http://"+a.WebAddr(), "projects", len(a.Projects()))
 		<-ctx.Done()
 		logger.Info("shutting down")
 	}

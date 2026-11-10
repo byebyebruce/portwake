@@ -1,4 +1,7 @@
-/dcpentry
+/portwake
 *.db
 *.db-shm
 *.db-wal
+/dist/
+/coverage.out
+/coverage.html

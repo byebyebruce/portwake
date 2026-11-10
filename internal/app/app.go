@@ -1,4 +1,4 @@
-// Package app wires dcpentry together. It is the single entry point used by
+// Package app wires portwake together. It is the single entry point used by
 // both the CLI and the tests.
 package app
 
@@ -12,20 +12,24 @@ import (
 	"sync"
 	"time"
 
-	"dcpentry/internal/compose"
-	"dcpentry/internal/config"
-	"dcpentry/internal/events"
-	"dcpentry/internal/project"
-	"dcpentry/internal/proxy"
-	"dcpentry/internal/store"
-	"dcpentry/internal/web"
+	"portwake/internal/compose"
+	"portwake/internal/config"
+	"portwake/internal/events"
+	"portwake/internal/project"
+	"portwake/internal/proxy"
+	"portwake/internal/store"
+	"portwake/internal/web"
 )
 
 type Options struct {
-	DBPath             string
-	WebAddr            string
-	Runner             compose.Runner
-	Import             []byte // YAML replacing the stored configuration at start
+	DBPath  string
+	WebAddr string
+	Runner  compose.Runner
+	// Import is YAML that replaces the stored configuration at start (db mode).
+	Import []byte
+	// ConfigPath makes a YAML file the configuration source: it is read at
+	// start and web/API changes are written back to it (file mode).
+	ConfigPath         string
 	Grace              time.Duration
 	ReconcileInterval  time.Duration
 	HealthPollInterval time.Duration
@@ -53,8 +57,11 @@ func New(opts Options) (*App, error) {
 	if opts.Runner == nil {
 		return nil, errors.New("runner is required")
 	}
+	if opts.ConfigPath != "" && opts.Import != nil {
+		return nil, errors.New("config file mode cannot be combined with import")
+	}
 	if opts.DBPath == "" {
-		opts.DBPath = "dcpentry.db"
+		opts.DBPath = "portwake.db"
 	}
 	if opts.WebAddr == "" {
 		opts.WebAddr = "127.0.0.1:9000"
@@ -84,26 +91,10 @@ func (a *App) Start(ctx context.Context) error {
 		return fmt.Errorf("open db: %w", err)
 	}
 	a.store = st
-	if a.opts.Import != nil {
-		ps, err := config.UnmarshalYAML(a.opts.Import)
-		if err == nil {
-			err = config.Validate(ps)
-		}
-		if err == nil {
-			err = st.ReplaceProjects(ps)
-		}
-		if err != nil {
-			st.Close()
-			return fmt.Errorf("import: %w", err)
-		}
-	}
-	projects, err := st.LoadProjects()
-	if err == nil {
-		err = config.Validate(projects)
-	}
+	projects, err := a.loadProjects()
 	if err != nil {
 		st.Close()
-		return fmt.Errorf("load config: %w", err)
+		return err
 	}
 
 	ch, cancel := a.bus.Subscribe(4096)
@@ -133,6 +124,46 @@ func (a *App) Start(ctx context.Context) error {
 	go func() { defer a.bgWG.Done(); a.mgr.Run(bg, a.opts.ReconcileInterval) }()
 	go func() { defer a.bgWG.Done(); a.maintain(bg) }()
 	return nil
+}
+
+// loadProjects reads the initial configuration from its source: the YAML
+// config file in file mode, or SQLite (optionally seeded by Import) in db mode.
+func (a *App) loadProjects() ([]config.Project, error) {
+	if a.opts.ConfigPath != "" {
+		projects, err := config.LoadFile(a.opts.ConfigPath)
+		if err != nil {
+			return nil, fmt.Errorf("load config file: %w", err)
+		}
+		return projects, nil
+	}
+	if a.opts.Import != nil {
+		projects, err := config.UnmarshalYAML(a.opts.Import)
+		if err == nil {
+			err = config.Validate(projects)
+		}
+		if err == nil {
+			err = a.store.ReplaceProjects(projects)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("import: %w", err)
+		}
+	}
+	projects, err := a.store.LoadProjects()
+	if err == nil {
+		err = config.Validate(projects)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	return projects, nil
+}
+
+// persistProjects writes the configuration to its source.
+func (a *App) persistProjects(projects []config.Project) error {
+	if a.opts.ConfigPath != "" {
+		return config.SaveFile(a.opts.ConfigPath, projects)
+	}
+	return a.store.ReplaceProjects(projects)
 }
 
 // maintain prunes old data hourly and reports event-write failures once a
@@ -216,7 +247,7 @@ func (a *App) UpdateProjects(fn func([]config.Project) ([]config.Project, error)
 		a.mgr.Apply(ctx, a.projects)
 		return err
 	}
-	if err := a.store.ReplaceProjects(projects); err != nil {
+	if err := a.persistProjects(projects); err != nil {
 		if rerr := a.proxy.Apply(a.projects); rerr != nil {
 			a.bus.Publish(events.Event{Type: events.Error, Message: "restore listeners", Error: rerr.Error()})
 		}

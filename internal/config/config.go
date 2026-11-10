@@ -51,7 +51,7 @@ type Route struct {
 	HealthService string `json:"health_service,omitempty" yaml:"health_service,omitempty"`
 }
 
-// Project is a docker compose project managed by dcpentry.
+// Project is a docker compose project managed by portwake.
 type Project struct {
 	Name         string    `json:"name" yaml:"name"`
 	Dir          string    `json:"dir" yaml:"dir"`

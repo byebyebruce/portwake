@@ -297,7 +297,7 @@ func TestShutdownLeavesProjectsRunning(t *testing.T) {
 func TestUIIsServed(t *testing.T) {
 	h := start(t, "")
 	code, body := h.do("GET", "/", "", "")
-	if code != 200 || !strings.Contains(body, "<title>dcpentry</title>") {
+	if code != 200 || !strings.Contains(body, "<title>portwake</title>") {
 		t.Fatalf("index: %d", code)
 	}
 	if code, _ := h.do("GET", "/vendor/alpine.min.js", "", ""); code != 200 {

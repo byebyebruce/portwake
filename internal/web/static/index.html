@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>dcpentry</title>
+<title>portwake</title>
 <link rel="stylesheet" href="vendor/uplot.min.css">
 <style>
 :root {
@@ -127,7 +127,7 @@ dialog::backdrop { background: #00000066; backdrop-filter: blur(2px); }
 <body x-data="app()" x-init="init()">
 <header>
   <div class="bar">
-    <div class="logo"><i></i>dcpentry</div>
+    <div class="logo"><i></i>portwake</div>
     <nav>
       <template x-for="t in tabs" :key="t.id">
         <button :class="{on: tab === t.id}" @click="go(t.id)" x-text="t.label"></button>
@@ -362,7 +362,7 @@ function app() {
     yaml: '', yamlErr: '', editing: null, formErr: '', toast: {msg: '', err: false},
 
     init() {
-      try { const t = localStorage.getItem('dcpentry.tab'); if (t && this.tabs.some(x => x.id === t)) this.tab = t; } catch (e) {}
+      try { const t = localStorage.getItem('portwake.tab'); if (t && this.tabs.some(x => x.id === t)) this.tab = t; } catch (e) {}
       this.refresh(); this.stream();
       setInterval(() => this.now = Date.now(), 1000);
       setInterval(() => this.refreshStatus(), 5000);
@@ -370,7 +370,7 @@ function app() {
     },
     go(t) {
       this.tab = t;
-      try { localStorage.setItem('dcpentry.tab', t); } catch (e) {}
+      try { localStorage.setItem('portwake.tab', t); } catch (e) {}
       if (t === 'events') this.loadEvents(true);
       if (t === 'stats') this.$nextTick(() => this.loadStats());
       if (t === 'yaml' && !this.yaml) this.loadYAML();

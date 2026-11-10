@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"dcpentry/internal/compose"
-	"dcpentry/internal/config"
+	"portwake/internal/compose"
+	"portwake/internal/config"
 )
 
 type Fake struct {
@@ -123,10 +123,10 @@ func (f *Fake) Up(ctx context.Context, p config.Project) error {
 	return f.start(p)
 }
 
-// StartExternally simulates `docker compose up` run outside dcpentry.
+// StartExternally simulates `docker compose up` run outside portwake.
 func (f *Fake) StartExternally(p config.Project) error { return f.start(p) }
 
-// StopExternally simulates `docker compose stop` run outside dcpentry.
+// StopExternally simulates `docker compose stop` run outside portwake.
 func (f *Fake) StopExternally(project string) { f.stop(project) }
 
 func (f *Fake) start(p config.Project) error {

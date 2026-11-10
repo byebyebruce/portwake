@@ -1,4 +1,4 @@
-module dcpentry
+module portwake
 
 go 1.26.4
 

@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"dcpentry/internal/config"
-	"dcpentry/internal/events"
+	"portwake/internal/config"
+	"portwake/internal/events"
 )
 
 // Waker brings a project up and counts an active connection on it.
@@ -299,7 +299,7 @@ func (s *Server) httpHandler(e *entry) http.Handler {
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			t := e.target.Load()
 			s.bus.Publish(events.Event{Type: events.Error, Project: t.project, Port: e.port, Message: "proxy upstream", Error: err.Error()})
-			http.Error(w, "dcpentry: upstream error: "+err.Error(), http.StatusBadGateway)
+			http.Error(w, "portwake: upstream error: "+err.Error(), http.StatusBadGateway)
 		},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -309,7 +309,7 @@ func (s *Server) httpHandler(e *entry) http.Handler {
 		// force-close.
 		if r.Header.Get("Upgrade") != "" {
 			if !s.begin() {
-				http.Error(w, "dcpentry: shutting down", http.StatusServiceUnavailable)
+				http.Error(w, "portwake: shutting down", http.StatusServiceUnavailable)
 				return
 			}
 			defer s.connWG.Done()
@@ -332,12 +332,12 @@ func (s *Server) httpHandler(e *entry) http.Handler {
 		}()
 		wk := s.lookup(t.project)
 		if wk == nil {
-			http.Error(cw, "dcpentry: project not managed", http.StatusServiceUnavailable)
+			http.Error(cw, "portwake: project not managed", http.StatusServiceUnavailable)
 			return
 		}
 		release, err := wk.Acquire(r.Context(), trigger(e.port))
 		if err != nil {
-			http.Error(cw, "dcpentry: project failed to start: "+err.Error(), http.StatusServiceUnavailable)
+			http.Error(cw, "portwake: project failed to start: "+err.Error(), http.StatusServiceUnavailable)
 			return
 		}
 		defer release()

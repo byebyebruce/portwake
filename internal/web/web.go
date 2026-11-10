@@ -16,10 +16,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"dcpentry/internal/config"
-	"dcpentry/internal/events"
-	"dcpentry/internal/project"
-	"dcpentry/internal/store"
+	"portwake/internal/config"
+	"portwake/internal/events"
+	"portwake/internal/project"
+	"portwake/internal/store"
 )
 
 //go:embed static
@@ -269,7 +269,7 @@ func (h *handler) exportYAML(c *gin.Context) {
 		writeErr(c, http.StatusInternalServerError, err)
 		return
 	}
-	c.Header("Content-Disposition", `attachment; filename="dcpentry.yaml"`)
+	c.Header("Content-Disposition", `attachment; filename="portwake.yaml"`)
 	c.Data(http.StatusOK, "application/yaml", b)
 }
 

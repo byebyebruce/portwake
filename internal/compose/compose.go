@@ -1,11 +1,11 @@
 // Package compose drives docker compose projects. Runner is the single
-// replaceable dependency of dcpentry; CLI is the production implementation.
+// replaceable dependency of portwake; CLI is the production implementation.
 package compose
 
 import (
 	"context"
 
-	"dcpentry/internal/config"
+	"portwake/internal/config"
 )
 
 // ServiceStatus is one row of `docker compose ps`.

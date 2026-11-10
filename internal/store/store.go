@@ -11,8 +11,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"dcpentry/internal/config"
-	"dcpentry/internal/events"
+	"portwake/internal/config"
+	"portwake/internal/events"
 )
 
 const (
