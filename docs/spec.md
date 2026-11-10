@@ -236,5 +236,5 @@ stopped  --(核对发现在跑)-->         running   (立即开始空闲计时)
 - 后端 compose 项目需要自己把服务端口发布到宿主机上（建议绑定到 `127.0.0.1`），而且不能和 portwake 的入口端口冲突。README 里应该说明这一点，并给出示例。
 - 由于配置里的项目全部被接管，所以手动启动的项目也会在空闲后被停掉。不想被停的项目把 `idle_timeout` 设为 0。
 - macOS 下用的是 Docker Desktop 或兼容的运行时，`docker compose` v2 必须可用。
-- 仓库提供 `Dockerfile`、`compose.yaml` 和 GitHub Actions 镜像构建；容器内运行时同样需要宿主机 `docker compose` v2。
+- 仓库提供 `Dockerfile`、`docker-compose.yaml` 和 GitHub Actions 镜像构建；容器内运行时同样需要宿主机 `docker compose` v2。
 - 后续可以考虑的功能：容器日志查看、启动等待页、按 Host 路由、按 cron 停止。

@@ -26,25 +26,25 @@ go build -o portwake ./cmd/portwake
 
 ## Docker
 
-仓库包含 `Dockerfile` 和 `compose.yaml`，镜像内自带 `docker` / `docker compose` CLI：
+仓库包含 `Dockerfile` 和 `docker-compose.yaml`，镜像内自带 `docker` / `docker compose` CLI：
 
 ```sh
 docker compose up -d --build
 ```
 
-管理页仍然是 http://127.0.0.1:9000。`compose.yaml` 的镜像名是 `ghcr.io/byebyebruce/portwake:latest`，本地构建会直接打上这个 tag；也可以改用 GitHub Actions 构建并推送到 GHCR 的镜像（`docker pull ghcr.io/byebyebruce/portwake:latest`）。
+管理页仍然是 http://127.0.0.1:9000。`docker-compose.yaml` 的镜像名是 `ghcr.io/byebyebruce/portwake:latest`，本地构建会直接打上这个 tag；也可以改用 GitHub Actions 构建并推送到 GHCR 的镜像（`docker pull ghcr.io/byebyebruce/portwake:latest`）。
 
 容器化运行的前提：
 
 - **挂载 Docker socket**：`/var/run/docker.sock`（已配置）。
 - **项目目录同路径挂载**：`docker compose` 在容器内执行，配置里的 `dir`、`files` 和 compose 里的 bind mount 路径必须与宿主机一致，例如 `- /srv:/srv`。
-- **入口端口要发布**：默认只发布 9000；配置里每个 `listen` 端口都要加到 `compose.yaml` 的 `ports` 中。
+- **入口端口要发布**：默认只发布 9000；配置里每个 `listen` 端口都要加到 `docker-compose.yaml` 的 `ports` 中。
 - **upstream 必须从容器内可达**：bridge 模式下写 `host.docker.internal:18080`（已通过 `extra_hosts` 配置）；Linux 也可以改用 `network_mode: host`，此时可以直接写 `127.0.0.1`。
 - **文件模式**：挂载一个目录而不是单个文件（Web 写回使用原子 rename），例如 `- ./config:/config`，并加 `--config /config/portwake.yaml`。
 
-> 挂载 docker socket 等价于把宿主机 root 权限交给容器；Web 页面没有鉴权，`compose.yaml` 默认只把 9000 发布到 `127.0.0.1`。
+> 挂载 docker socket 等价于把宿主机 root 权限交给容器；Web 页面没有鉴权，`docker-compose.yaml` 默认只把 9000 发布到 `127.0.0.1`。
 
-`.github/workflows/docker.yml` 会在 push 到 `main`、推送 `v*` tag、PR 或手动触发时构建 `linux/amd64` + `linux/arm64` 镜像；非 PR 推送到 `ghcr.io/byebyebruce/portwake`。使用 CI 镜像时，删掉 `compose.yaml` 里的 `build:` 即可。
+`.github/workflows/docker.yml` 会在 push 到 `main`、推送 `v*` tag、PR 或手动触发时构建 `linux/amd64` + `linux/arm64` 镜像；非 PR 推送到 `ghcr.io/byebyebruce/portwake`。使用 CI 镜像时，删掉 `docker-compose.yaml` 里的 `build:` 即可。
 
 ## 配置
 
