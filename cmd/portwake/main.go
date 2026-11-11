@@ -1,11 +1,11 @@
-// Command portwake is an on-demand traffic entry for docker compose projects.
+// Command portwake is an on-demand traffic entry for compose projects,
+// docker containers and foreground binaries.
 package main
 
 import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -14,7 +14,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"portwake/internal/app"
-	"portwake/internal/compose"
 	"portwake/internal/events"
 	"portwake/internal/tui"
 )
@@ -27,6 +26,7 @@ func main() {
 		webAddr  string
 		importF  string
 		configF  string
+		stateDir string
 		useTUI   bool
 		grace    time.Duration
 		logLevel string
@@ -34,18 +34,14 @@ func main() {
 	root := &cobra.Command{
 		Use:          "portwake",
 		Version:      version,
-		Short:        "On-demand traffic entry for docker compose projects",
-		Long:         "portwake listens on entry ports, starts the matching docker compose project on the first connection, forwards traffic once it is ready and stops it again when idle.",
+		Short:        "On-demand traffic entry for compose projects, containers and binaries",
+		Long:         "portwake listens on entry ports, starts the matching project (docker compose, single docker container or foreground binary) on the first connection, forwards traffic once it is ready and stops it again when idle.",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			docker, err := exec.LookPath("docker")
-			if err != nil {
-				return fmt.Errorf("docker not found on PATH: %w", err)
-			}
 			if configF != "" && importF != "" {
 				return fmt.Errorf("--config and --import cannot be used together")
 			}
-			opts := app.Options{DBPath: dbPath, WebAddr: webAddr, Runner: compose.CLI{Docker: docker}, Grace: grace, ConfigPath: configF}
+			opts := app.Options{DBPath: dbPath, WebAddr: webAddr, StateDir: stateDir, Grace: grace, ConfigPath: configF}
 			if importF != "" {
 				b, err := os.ReadFile(importF)
 				if err != nil {
@@ -65,6 +61,7 @@ func main() {
 	f.StringVar(&webAddr, "web", "127.0.0.1:9000", "web UI listen address")
 	f.StringVar(&importF, "import", "", "YAML file replacing the stored configuration at start (db mode)")
 	f.StringVar(&configF, "config", "", "YAML file used as the live configuration; web edits are written back to it")
+	f.StringVar(&stateDir, "state-dir", "", "directory for exec pid files and logs (default <db>.state)")
 	f.BoolVar(&useTUI, "tui", false, "show the terminal dashboard instead of logs")
 	f.DurationVar(&grace, "grace", 10*time.Second, "how long to wait for connections on shutdown")
 	f.StringVar(&logLevel, "log-level", "info", "log level when not using --tui (debug, info, warn, error)")

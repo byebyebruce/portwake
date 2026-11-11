@@ -7,46 +7,105 @@
 #
 # 文件模式下 Web 修改会重写本文件，手写注释不会保留。
 #
+# 项目类型（type）：
+#   - compose：docker compose 项目（默认）
+#   - docker ：单个容器，由 portwake 执行 docker run / start / stop
+#   - exec   ：直接运行前台二进制，portwake 跟踪进程组并转发流量
+#
 # 注意：
-#   - 后端 compose 项目必须自己把端口发布到宿主机（例如
-#     ports: ["127.0.0.1:18080:80"]），且 upstream 不能和入口 listen 冲突。
+#   - backend 必须自己监听/发布端口，且 upstream 不能和入口 listen 冲突。
 #   - 项目名必须匹配 [a-z0-9][a-z0-9_-]*，入口端口全局唯一。
-#   - 下面的 dir、端口都是示例值，使用前请改成实际路径和端口。
+#   - 下面的 dir、镜像、端口都是示例值，使用前请改成实际路径和端口。
 
 projects:
-  # Web 服务：HTTP 转发，等 compose healthcheck 就绪后再放流量
+  # --- compose：Web 服务，等 compose healthcheck 就绪后再放流量 ---
   - name: blog
+    type: compose                  # 可省略，默认就是 compose
     dir: /srv/blog
-    files: [compose.yaml]          # 可选；默认按 compose 规则查找
+    files: [compose.yaml]          # 可选；留空时按 compose 规则查找（compose.yaml 优先，也支持 docker-compose.yaml）
     env_file: .env                 # 可选
     profiles: []                   # 可选
     idle_timeout: 15m              # 默认 15m；0 表示永不自动停止
     start_timeout: 3m              # 默认 3m
+    stop_timeout: 10s              # 默认 10s
     routes:
       - listen: 8080               # 入口端口
         bind: 0.0.0.0              # 默认 0.0.0.0；只能填 IP
         mode: http                 # http 会记录请求日志和统计
         upstream: 127.0.0.1:18080
-        health_service: app        # 可选：等该 service 的 healthcheck 变为 healthy
+        health_service: app        # 仅 compose：等该 service 的 healthcheck 变为 healthy
       # 同一项目可以挂多个入口，共享启停状态
       - listen: 8081
         bind: 127.0.0.1
         mode: http
         upstream: 127.0.0.1:18080
 
-  # TCP 服务：任意协议透传，例如 Redis、MySQL、SSH
+  # --- docker：单个容器，例如 Redis ---
   - name: cache
-    dir: /srv/cache
+    type: docker
+    image: redis:7-alpine
+    container_name: portwake-cache # 可选，默认 portwake-<项目名>
+    command: ["redis-server", "--save", ""]  # 可选，覆盖镜像 CMD
+    env:
+      TZ: UTC
+    ports: ["127.0.0.1:16379:6379"]          # 语法同 docker run -p
+    volumes: ["/srv/cache:/data"]            # 可选
     idle_timeout: 5m
     routes:
       - listen: 6380
         bind: 127.0.0.1
-        mode: tcp                  # 默认就是 tcp
+        mode: tcp                  # 默认就是 tcp，任意协议透传
         upstream: 127.0.0.1:16379
 
-  # 常驻服务：空闲也不自动停止
+  # --- exec：直接运行二进制（必须保持前台） ---
+  - name: app
+    type: exec
+    dir: /srv/app                  # 工作目录，可选
+    command: ["./app", "--port", "18080"]    # argv，不经过 shell
+    env:
+      LOG_LEVEL: info
+    env_file: .env                 # 可选，相对路径基于 dir
+    stop_signal: SIGTERM           # 可选，默认 SIGTERM
+    stop_timeout: 10s              # 超时后 SIGKILL 整个进程组
+    idle_timeout: 15m
+    routes:
+      - listen: 9081
+        bind: 127.0.0.1
+        mode: http
+        upstream: 127.0.0.1:18080
+
+  # --- exec + shell：需要管道、&&、变量展开时显式调用 bash/sh ---
+  # 注意：
+  #   - command 的每一项都是一个参数，portwake 不做 shell 解析；
+  #     "&&"、管道、重定向、通配符只有写进 bash -c 的脚本里才生效。
+  #   - 不要加 & 放到后台；也不需要把输出重定向到日志文件：
+  #     portwake 会把 stdout/stderr 收集到 <state-dir>/logs/<项目名>.log，
+  #     Web 项目卡片的「日志」按钮可查看。
+  #   - 推荐在脚本里用 exec 启动最终进程，例如 "exec ./worker"。
+  #   - 也可以直接执行脚本文件：command: ["bash", "/srv/worker/start.sh"]
+  - name: worker
+    type: exec
+    dir: /srv/worker
+    command: ["bash", "-c", "exec ./worker --port 18082"]
+    env:
+      WORKER_MODE: batch
+    stop_signal: SIGTERM
+    stop_timeout: 10s
+    idle_timeout: 10m
+    routes:
+      - listen: 9082
+        bind: 127.0.0.1
+        mode: http
+        upstream: 127.0.0.1:18082
+
+  # --- 常驻服务：空闲也不自动停止 ---
   - name: db
-    dir: /srv/db
+    type: docker
+    image: postgres:16-alpine
+    env:
+      POSTGRES_PASSWORD: example
+    ports: ["127.0.0.1:15433:5432"]
+    volumes: ["/srv/db:/var/lib/postgresql/data"]
     idle_timeout: 0
     routes:
       - listen: 15432

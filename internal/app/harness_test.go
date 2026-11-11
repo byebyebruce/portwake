@@ -15,6 +15,7 @@ import (
 
 	"portwake/internal/app"
 	"portwake/internal/compose/composetest"
+	"portwake/internal/runner"
 )
 
 type harness struct {
@@ -49,7 +50,7 @@ func (h *harness) boot(yaml string) {
 	opts := app.Options{
 		DBPath:             h.db,
 		WebAddr:            "127.0.0.1:0",
-		Runner:             h.fake,
+		Runners:            runner.Manager{Compose: h.fake, Docker: h.fake, Exec: h.fake},
 		Grace:              200 * time.Millisecond,
 		ReconcileInterval:  30 * time.Millisecond,
 		HealthPollInterval: 10 * time.Millisecond,

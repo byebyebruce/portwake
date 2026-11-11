@@ -9,12 +9,13 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
-	"portwake/internal/compose"
 	"portwake/internal/config"
 	"portwake/internal/events"
+	"portwake/internal/runner"
 )
 
 type State string
@@ -45,9 +46,9 @@ type attempt struct {
 }
 
 // Controller runs the lifecycle of a single project. All transitions happen
-// under mu; compose calls run in goroutines outside the lock.
+// under mu; runner calls run in goroutines outside the lock.
 type Controller struct {
-	runner compose.Runner
+	runner runner.Runner
 	bus    *events.Bus
 	tuning Tuning
 
@@ -67,7 +68,7 @@ type Controller struct {
 	transitions  int
 }
 
-func NewController(cfg config.Project, runner compose.Runner, bus *events.Bus, tuning Tuning) *Controller {
+func NewController(cfg config.Project, runner runner.Runner, bus *events.Bus, tuning Tuning) *Controller {
 	return &Controller{
 		cfg:     cfg,
 		runner:  runner,
@@ -215,7 +216,7 @@ func (c *Controller) Reconcile(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	running := compose.IsRunning(st)
+	running := runner.IsRunning(st)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -300,6 +301,9 @@ func (c *Controller) waitReady(ctx context.Context, cfg config.Project) error {
 	}
 	for _, r := range cfg.Routes {
 		for {
+			if a, ok := c.runner.(runner.Alive); ok && !a.Alive(cfg) {
+				return c.exitedDuringStart(cfg)
+			}
 			ready, err := c.routeReady(ctx, cfg, r)
 			if err != nil {
 				return err
@@ -315,6 +319,22 @@ func (c *Controller) waitReady(ctx context.Context, cfg config.Project) error {
 		}
 	}
 	return nil
+}
+
+// exitedDuringStart builds the start error for a process that died before
+// becoming ready, including the tail of its output when available.
+func (c *Controller) exitedDuringStart(cfg config.Project) error {
+	msg := "process exited during startup"
+	if ls, ok := c.runner.(runner.LogSource); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if out, err := ls.Logs(ctx, cfg, 20); err == nil {
+			if tail := strings.TrimSpace(out); tail != "" {
+				msg += ":\n" + tail
+			}
+		}
+	}
+	return errors.New(msg)
 }
 
 func (c *Controller) routeReady(ctx context.Context, cfg config.Project, r config.Route) (bool, error) {

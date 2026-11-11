@@ -6,15 +6,15 @@ import (
 	"sync"
 	"time"
 
-	"portwake/internal/compose"
 	"portwake/internal/config"
 	"portwake/internal/events"
+	"portwake/internal/runner"
 )
 
 // Manager holds one Controller per configured project and periodically
-// reconciles their state with docker.
+// reconciles their state with the corresponding runner.
 type Manager struct {
-	runner compose.Runner
+	runner runner.Runner
 	bus    *events.Bus
 	tuning Tuning
 
@@ -22,7 +22,7 @@ type Manager struct {
 	ctrls map[string]*Controller
 }
 
-func NewManager(runner compose.Runner, bus *events.Bus, tuning Tuning) *Manager {
+func NewManager(runner runner.Runner, bus *events.Bus, tuning Tuning) *Manager {
 	return &Manager{runner: runner, bus: bus, tuning: tuning, ctrls: map[string]*Controller{}}
 }
 

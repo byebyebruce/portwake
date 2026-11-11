@@ -16,6 +16,7 @@ import (
 
 	"portwake/internal/app"
 	"portwake/internal/compose"
+	"portwake/internal/runner"
 )
 
 // TestRealComposeLifecycle drives a real nginx compose project:
@@ -34,7 +35,7 @@ func TestRealComposeLifecycle(t *testing.T) {
 	a, err := app.New(app.Options{
 		DBPath:  filepath.Join(t.TempDir(), "db"),
 		WebAddr: "127.0.0.1:0",
-		Runner:  compose.CLI{},
+		Runners: runner.Manager{Compose: compose.CLI{}},
 		Import: []byte(fmt.Sprintf(`projects:
   - name: %s
     dir: %s
@@ -69,7 +70,7 @@ func TestRealComposeLifecycle(t *testing.T) {
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		st, _ := compose.CLI{}.Ps(context.Background(), a.Projects()[0])
-		if !compose.IsRunning(st) {
+		if !runner.IsRunning(st) {
 			return
 		}
 		time.Sleep(500 * time.Millisecond)

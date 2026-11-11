@@ -13,6 +13,7 @@ import (
 
 	"portwake/internal/app"
 	"portwake/internal/compose/composetest"
+	"portwake/internal/runner"
 	"portwake/internal/store"
 )
 
@@ -142,9 +143,14 @@ func TestFileModeWriteFailureRollsBack(t *testing.T) {
 	}
 }
 
+func fakeRunners() runner.Manager {
+	f := composetest.New()
+	return runner.Manager{Compose: f, Docker: f, Exec: f}
+}
+
 func TestFileModeRejectsImportOption(t *testing.T) {
 	_, err := app.New(app.Options{
-		Runner:     composetest.New(),
+		Runners:    fakeRunners(),
 		ConfigPath: "config.yaml",
 		Import:     []byte("projects: []\n"),
 	})
@@ -157,7 +163,7 @@ func TestFileModeMissingConfigFailsToStart(t *testing.T) {
 	a, err := app.New(app.Options{
 		DBPath:     filepath.Join(t.TempDir(), "portwake.db"),
 		WebAddr:    "127.0.0.1:0",
-		Runner:     composetest.New(),
+		Runners:    fakeRunners(),
 		ConfigPath: filepath.Join(t.TempDir(), "missing.yaml"),
 	})
 	if err != nil {

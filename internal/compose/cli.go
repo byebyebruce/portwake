@@ -7,15 +7,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
+	"time"
 
 	"portwake/internal/config"
+	"portwake/internal/runner"
 )
 
 // CLI runs the `docker compose` command found on PATH.
 type CLI struct {
 	Docker string // docker binary; defaults to "docker"
 }
+
+var _ runner.Runner = CLI{}
+var _ runner.LogSource = CLI{}
 
 func (c CLI) base(p config.Project) []string {
 	args := []string{"compose", "-p", p.Name}
@@ -57,16 +63,29 @@ func (c CLI) Up(ctx context.Context, p config.Project) error {
 }
 
 func (c CLI) Stop(ctx context.Context, p config.Project) error {
-	_, err := c.run(ctx, p, "stop")
+	secs := int((p.StopLimit() + time.Second - 1) / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	_, err := c.run(ctx, p, "stop", "-t", strconv.Itoa(secs))
 	return err
 }
 
-func (c CLI) Ps(ctx context.Context, p config.Project) ([]ServiceStatus, error) {
+func (c CLI) Ps(ctx context.Context, p config.Project) ([]runner.ServiceStatus, error) {
 	out, err := c.run(ctx, p, "ps", "--format", "json")
 	if err != nil {
 		return nil, err
 	}
 	return parsePs(out)
+}
+
+// Logs returns the last lines of the project's container output.
+func (c CLI) Logs(ctx context.Context, p config.Project, lines int) (string, error) {
+	if lines <= 0 {
+		lines = 200
+	}
+	out, err := c.run(ctx, p, "logs", "--no-color", "--tail", strconv.Itoa(lines))
+	return string(out), err
 }
 
 type psRow struct {
@@ -77,7 +96,7 @@ type psRow struct {
 
 // parsePs accepts both the JSON array (older compose) and the
 // one-object-per-line output (newer compose) of `ps --format json`.
-func parsePs(out []byte) ([]ServiceStatus, error) {
+func parsePs(out []byte) ([]runner.ServiceStatus, error) {
 	out = bytes.TrimSpace(out)
 	var rows []psRow
 	if len(out) == 0 {
@@ -102,9 +121,9 @@ func parsePs(out []byte) ([]ServiceStatus, error) {
 			rows = append(rows, r)
 		}
 	}
-	st := make([]ServiceStatus, 0, len(rows))
+	st := make([]runner.ServiceStatus, 0, len(rows))
 	for _, r := range rows {
-		st = append(st, ServiceStatus{Service: r.Service, State: r.State, Health: r.Health})
+		st = append(st, runner.ServiceStatus{Service: r.Service, State: r.State, Health: r.Health})
 	}
 	return st, nil
 }

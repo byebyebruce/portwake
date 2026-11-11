@@ -4,9 +4,8 @@ services:
   portwake:
     build:
       context: .
-    # 本地构建和 CI 推送使用同一个镜像名。
-    # 只想用 CI 推送到 GHCR 的镜像时，删除上面的 build。
-    image: ghcr.io/byebyebruce/portwake:latest
+    # 本地构建的镜像名。
+    image: portwake:latest
     restart: unless-stopped
 
     # 默认以 db 模式运行，数据库持久化在 portwake-data 卷里。
@@ -21,9 +20,10 @@ services:
       # - "6380:6380"
 
     volumes:
-      # 容器内的 docker compose 命令通过宿主机 daemon 执行
+      # 容器内的 docker compose / docker 命令通过宿主机 daemon 执行
       - /var/run/docker.sock:/var/run/docker.sock
-      # SQLite（事件、统计；db 模式下还有项目配置）
+      # SQLite（事件、统计；db 模式下还有项目配置）和 exec 的 pid/日志
+      # （默认 /data/portwake.db.state）
       - portwake-data:/data
       # 文件模式：挂载配置目录（不要只挂单个文件，Web 修改使用原子 rename）
       # - ./config:/config

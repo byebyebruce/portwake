@@ -14,9 +14,12 @@ import (
 
 	"portwake/internal/compose"
 	"portwake/internal/config"
+	"portwake/internal/docker"
 	"portwake/internal/events"
+	"portwake/internal/process"
 	"portwake/internal/project"
 	"portwake/internal/proxy"
+	"portwake/internal/runner"
 	"portwake/internal/store"
 	"portwake/internal/web"
 )
@@ -24,7 +27,11 @@ import (
 type Options struct {
 	DBPath  string
 	WebAddr string
-	Runner  compose.Runner
+	// Runners overrides the runner set (tests). Nil entries are replaced by
+	// the CLI-backed defaults.
+	Runners runner.Manager
+	// StateDir stores exec pid files and logs. It defaults to DBPath+".state".
+	StateDir string
 	// Import is YAML that replaces the stored configuration at start (db mode).
 	Import []byte
 	// ConfigPath makes a YAML file the configuration source: it is read at
@@ -36,11 +43,12 @@ type Options struct {
 }
 
 type App struct {
-	opts  Options
-	bus   *events.Bus
-	store *store.Store
-	mgr   *project.Manager
-	proxy *proxy.Server
+	opts    Options
+	bus     *events.Bus
+	runners runner.Manager
+	store   *store.Store
+	mgr     *project.Manager
+	proxy   *proxy.Server
 
 	cfgMu    sync.Mutex
 	projects []config.Project
@@ -54,9 +62,6 @@ type App struct {
 }
 
 func New(opts Options) (*App, error) {
-	if opts.Runner == nil {
-		return nil, errors.New("runner is required")
-	}
 	if opts.ConfigPath != "" && opts.Import != nil {
 		return nil, errors.New("config file mode cannot be combined with import")
 	}
@@ -72,9 +77,25 @@ func New(opts Options) (*App, error) {
 	if opts.ReconcileInterval <= 0 {
 		opts.ReconcileInterval = 10 * time.Second
 	}
+	if opts.StateDir == "" {
+		opts.StateDir = opts.DBPath + ".state"
+	}
+	if opts.Runners.Compose == nil {
+		opts.Runners.Compose = compose.CLI{}
+	}
+	if opts.Runners.Docker == nil {
+		opts.Runners.Docker = docker.CLI{}
+	}
+	if opts.Runners.Exec == nil {
+		pr, err := process.New(process.Options{StateDir: opts.StateDir})
+		if err != nil {
+			return nil, err
+		}
+		opts.Runners.Exec = pr
+	}
 	bus := events.NewBus()
-	a := &App{opts: opts, bus: bus}
-	a.mgr = project.NewManager(opts.Runner, bus, project.Tuning{HealthPollInterval: opts.HealthPollInterval})
+	a := &App{opts: opts, bus: bus, runners: opts.Runners}
+	a.mgr = project.NewManager(opts.Runners, bus, project.Tuning{HealthPollInterval: opts.HealthPollInterval})
 	a.proxy = proxy.New(bus, func(name string) proxy.Waker {
 		if c := a.mgr.Get(name); c != nil {
 			return c
@@ -224,6 +245,24 @@ func (a *App) Projects() []config.Project {
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
 	return slices.Clone(a.projects)
+}
+
+// ProjectLogs returns the last lines of a project's output.
+func (a *App) ProjectLogs(ctx context.Context, name string, lines int) (string, error) {
+	p, ok := findProject(a.Projects(), name)
+	if !ok {
+		return "", project.ErrNotFound
+	}
+	return a.runners.Logs(ctx, p, lines)
+}
+
+func findProject(projects []config.Project, name string) (config.Project, bool) {
+	for _, p := range projects {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return config.Project{}, false
 }
 
 // UpdateProjects transforms the current configuration with fn, validates

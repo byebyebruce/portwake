@@ -1,5 +1,6 @@
-// Package composetest provides a fake compose.Runner. "Starting" a project
-// opens real echo servers on each route's upstream address.
+// Package composetest provides a fake runner for tests. It simulates any
+// project type: "starting" a project opens real echo servers on each
+// route's upstream address.
 package composetest
 
 import (
@@ -12,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"portwake/internal/compose"
 	"portwake/internal/config"
+	"portwake/internal/runner"
 )
 
 type Fake struct {
@@ -23,6 +24,7 @@ type Fake struct {
 	stopDelay map[string]time.Duration
 	warmup    map[string]time.Duration
 	health    map[string]string // "project/service" -> health
+	logs      map[string]string
 	running   map[string]*instance
 	upCalls   map[string]int
 	stopCalls map[string]int
@@ -42,13 +44,15 @@ func New() *Fake {
 		stopDelay: map[string]time.Duration{},
 		warmup:    map[string]time.Duration{},
 		health:    map[string]string{},
+		logs:      map[string]string{},
 		running:   map[string]*instance{},
 		upCalls:   map[string]int{},
 		stopCalls: map[string]int{},
 	}
 }
 
-var _ compose.Runner = (*Fake)(nil)
+var _ runner.Runner = (*Fake)(nil)
+var _ runner.LogSource = (*Fake)(nil)
 
 // SetUpDelay makes Up for the project take d (honouring ctx cancellation).
 func (f *Fake) SetUpDelay(project string, d time.Duration) {
@@ -85,6 +89,19 @@ func (f *Fake) SetHealth(project, service, health string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.health[project+"/"+service] = health
+}
+
+// SetLogs sets the text returned by Logs for the project.
+func (f *Fake) SetLogs(project, logs string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.logs[project] = logs
+}
+
+func (f *Fake) Logs(ctx context.Context, p config.Project, lines int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.logs[p.Name], nil
 }
 
 func (f *Fake) UpCalls(project string) int {
@@ -174,16 +191,16 @@ func (f *Fake) stop(name string) {
 	}
 }
 
-func (f *Fake) Ps(ctx context.Context, p config.Project) ([]compose.ServiceStatus, error) {
+func (f *Fake) Ps(ctx context.Context, p config.Project) ([]runner.ServiceStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.running[p.Name] == nil {
 		return nil, nil
 	}
-	out := []compose.ServiceStatus{{Service: "app", State: "running", Health: f.health[p.Name+"/app"]}}
+	out := []runner.ServiceStatus{{Service: "app", State: "running", Health: f.health[p.Name+"/app"]}}
 	for _, r := range p.Routes {
 		if r.HealthService != "" && r.HealthService != "app" {
-			out = append(out, compose.ServiceStatus{Service: r.HealthService, State: "running", Health: f.health[p.Name+"/"+r.HealthService]})
+			out = append(out, runner.ServiceStatus{Service: r.HealthService, State: "running", Health: f.health[p.Name+"/"+r.HealthService]})
 		}
 	}
 	return out, nil

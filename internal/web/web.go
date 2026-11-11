@@ -2,6 +2,7 @@
 package web
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -33,6 +34,7 @@ type Backend interface {
 	Snapshots() []project.Snapshot
 	StartProject(name string) error
 	StopProject(name string) error
+	ProjectLogs(ctx context.Context, name string, lines int) (string, error)
 	Events(store.EventQuery) ([]events.Event, error)
 	Stats(project string, from, to time.Time) ([]store.ProjectStats, error)
 	Bus() *events.Bus
@@ -56,6 +58,7 @@ func Handler(b Backend) http.Handler {
 	api.DELETE("/projects/:name", h.deleteProject)
 	api.POST("/projects/:name/start", h.startProject)
 	api.POST("/projects/:name/stop", h.stopProject)
+	api.GET("/projects/:name/logs", h.projectLogs)
 	api.GET("/config.yaml", h.exportYAML)
 	api.PUT("/config.yaml", h.importYAML)
 
@@ -261,6 +264,23 @@ func (h *handler) startProject(c *gin.Context) {
 
 func (h *handler) stopProject(c *gin.Context) {
 	respondAccepted(c, h.b.StopProject(c.Param("name")))
+}
+
+// projectLogs returns the tail of a project's output as plain text.
+func (h *handler) projectLogs(c *gin.Context) {
+	lines, _ := strconv.Atoi(c.DefaultQuery("lines", "200"))
+	if lines <= 0 {
+		lines = 200
+	}
+	if lines > 2000 {
+		lines = 2000
+	}
+	out, err := h.b.ProjectLogs(c.Request.Context(), c.Param("name"), lines)
+	if err != nil {
+		writeErr(c, errStatus(err), err)
+		return
+	}
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(out))
 }
 
 func (h *handler) exportYAML(c *gin.Context) {

@@ -4,15 +4,17 @@
 
 我在单机上维护了很多 docker compose 项目，它们大部分时间都没人访问，却一直占着内存和 CPU。手动 `up` / `stop` 很麻烦：每次想用某个服务都得先记起它在哪个目录、敲命令、等它起来；用完又常常忘记停掉。我需要一个入口，让我像访问常驻服务一样访问这些项目，而它们只在真正有流量时才运行。
 
+另外有些服务只是一个容器（Redis、Postgres 之类），或者只是一个编译好的二进制，用 compose 包一层并不划算。我希望同一个入口也能按需拉起它们，而不是维护多套工具。
+
 ## Solution
 
-portwake 是一个用 Go 编写的单二进制流量入口，在宿主机上手动启动。它为每个被管理的 compose 项目监听一个或多个入口端口：
+portwake 是一个用 Go 编写的单二进制流量入口，在宿主机上手动启动。它为每个被管理的项目监听一个或多个入口端口。项目有三种 runner：`compose`（docker compose 项目，默认）、`docker`（单个容器）、`exec`（前台二进制），由统一的 runner 管理器调度：
 
-- 有连接进来时，如果项目没在运行，就执行 `docker compose up -d` 拉起它，等就绪后再把挂起的连接转发过去；
-- 项目连续一段时间（默认 15 分钟）没有活跃连接，就自动 `docker compose stop`；
+- 有连接进来时，如果项目没在运行，就通过对应的 runner 拉起它（`docker compose up -d` / `docker run -d` / 直接执行二进制），等就绪后再把挂起的连接转发过去；
+- 项目连续一段时间（默认 15 分钟）没有活跃连接，就自动停止（`docker compose stop` / `docker stop` / 向进程组发停止信号）；
 - 支持 TCP（任意协议）和 HTTP（带访问日志和请求统计）两种转发模式；
 - 所有配置存在 SQLite 中，可以通过内嵌的 Web 页面编辑，也可以导入导出 YAML；
-- Web 页面展示实时状态、事件日志和统计（拉起次数、启动耗时、运行时长、流量趋势）；
+- Web 页面展示实时状态、事件日志和统计（拉起次数、启动耗时、运行时长、流量趋势），并可查看每个项目的日志（compose/docker 通过 docker CLI，exec 读取捕获的日志文件）；
 - 加 `--tui` 参数时在终端显示 bubbletea 界面，否则用 charm log 打印日志。
 
 ## User Stories
@@ -102,14 +104,31 @@ portwake 是一个用 Go 编写的单二进制流量入口，在宿主机上手�
 57. 作为用户，我想 portwake 退出时不停止任何项目，这样重启 portwake 不会中断服务。
 58. 作为用户，我想 portwake 从 PATH 中找到 `docker` 命令，这样手动启动时不需要额外配置。
 
+### 项目类型与日志
+
+59. 作为用户，我想用 `type: compose` 管理 docker compose 项目（默认值，兼容旧配置），这样现有配置不用改。
+60. 作为用户，我想用 `type: docker` 管理单个容器，由 portwake 负责 `docker run` / `start` / `stop`，这样常用中间件不用写 compose 文件。
+61. 作为用户，我想用 `type: exec` 直接运行前台二进制，并用 argv 数组配置命令，这样编译产物不需要 shell 和 compose。
+62. 作为用户，我想 exec 进程被放进独立进程组，停止时向整个进程组发信号、超时后 `SIGKILL`，这样父进程带起来的子进程也能被清理。
+63. 作为用户，我想为 docker/exec 配置停止信号和停止超时，这样不同的程序可以优雅退出。
+64. 作为用户，我想 portwake 退出时 exec 进程继续运行，重启后如果进程还活着就被接管并继续空闲计时，这样重启 portwake 不会中断服务。
+65. 作为用户，我想 exec 的 stdout/stderr 被捕获到文件，并能在 Web 上查看最后若干行，这样排查启动失败很方便；日志过大时在下次全新启动时轮转。
+66. 作为用户，我想 exec 在就绪前退出时立即报错并附上日志末尾，这样不用等满 `start_timeout`。
+67. 作为用户，我想 Web 项目卡片上有「日志」按钮，三种类型用同一套接口查看日志。
+68. 作为用户，我想配置按类型校验字段（compose 必须有 `dir`、docker 必须有 `image`、exec 必须有 `command`，且不接受不属于该类型的字段），这样错误配置在保存时就被拒绝。
+69. 作为用户，我想只用 exec 时不需要安装 docker，这样这个工具在纯二进制场景也能用。
+
 ## Implementation Decisions
 
 ### 总体架构
 
-- 单个 Go 二进制，Go 1.23+，module 名为 `portwake`，CLI 使用 cobra。
+- 单个 Go 二进制，Go 1.26+，module 名为 `portwake`，CLI 使用 cobra。
 - 默认在宿主机上运行；也提供 Docker 镜像。容器内运行时必须挂载 docker socket，并以相同绝对路径挂载被管理的 compose 项目目录，上游地址必须从容器内可达（见 README）。
 - 进程内的模块划分：
-  - **compose**：封装 `docker compose` CLI，对外暴露 `ComposeRunner` 接口。
+  - **runner**：定义统一的 `Runner` 接口（Up/Stop/Ps）、按项目类型分发的 `Manager`，以及可选的 `LogSource`（Logs）和 `Alive`（启动阶段存活探测）能力。
+  - **compose**：封装 `docker compose` CLI 的 runner。
+  - **docker**：通过 `docker` CLI 管理单个容器（run/start/stop/inspect/logs）的 runner。
+  - **process**：exec runner，负责进程组、pid/日志文件、停止信号升级和重启接管。
   - **project**：每个项目一个状态机，负责启停、就绪等待、空闲计时、外部状态核对和连接计数。
   - **proxy**：入口监听器管理（按配置差异增删监听器），以及 TCP 和 HTTP 两种转发实现。
   - **store**：基于 SQLite 的配置、事件、统计存储，包含 YAML 导入导出和数据保留清理。
@@ -118,13 +137,21 @@ portwake 是一个用 Go 编写的单二进制流量入口，在宿主机上手�
   - **tui**：bubbletea 界面，消费事件总线和状态快照。
   - **app**：组装以上模块，是测试和 CLI 的统一入口。
 
-### ComposeRunner 接口（唯一的测试接缝）
+### Runner 抽象（唯一的测试接缝）
 
-只把调用 compose 的部分抽象成接口，它是唯一可以被替换的依赖。操作语义如下：
+只把启动/停止/查询项目的部分抽象成 `runner.Runner` 接口，它是唯一可以被替换的依赖。`runner.Manager` 按 `project.RunnerType()` 把调用分发给 compose、docker、exec 三个 runner，对应 runner 为 nil 时返回 `ErrNoRunner`。操作语义如下：
 
-- **Up(project)**：等价于 `docker compose -p <name> -f <files...> [--env-file] [--profile...] up -d`，工作目录为项目的 `dir`。
-- **Stop(project)**：等价于 `docker compose ... stop`。
-- **Ps(project)**：返回项目各 service 的运行状态和健康状态（基于 `ps --format json`），用于启动时识别状态、定期核对和 healthcheck 就绪判断。
+- **Up(project)**：确保项目已启动，不等待应用就绪。
+  - compose：`docker compose -p <name> -f <files...> [--env-file] [--profile...] up -d`，工作目录为项目的 `dir`。
+  - docker：容器不存在时 `docker run -d`（带 `--name`、`--label portwake.project=<name>`、env/端口/卷/网络参数）；已存在但停止时 `docker start`；已在运行则什么也不做。
+  - exec：状态文件里记录的进程还活着就接管；否则启动新进程（独立进程组，stdout/stderr 写入日志文件）。
+- **Stop(project)**：compose 执行 `docker compose ... stop`；docker 执行 `docker stop --time <秒> [--signal SIG]`；exec 向进程组发停止信号（默认 `SIGTERM`），`stop_timeout` 后升级为 `SIGKILL`。
+- **Ps(project)**：返回各 service/容器的运行状态和健康状态，用于启动时识别状态、定期核对和 healthcheck 就绪判断。exec 用 pid 文件加 `kill(pid, 0)` 判断。
+
+可选接口：
+
+- **LogSource.Logs(ctx, project, lines)**：返回最近若干行日志。compose/docker 调用 docker CLI，exec 读取 `<state-dir>/logs/<name>.log`。
+- **Alive.Alive(project)**：启动等待期间快速判断进程是否还活着，exec 用它在进程提前退出时立即失败。
 
 上游的 TCP 探测由 project 模块直接发起网络连接，不走这个接口。
 
@@ -149,12 +176,19 @@ stopped  --(核对发现在跑)-->         running   (立即开始空闲计时)
 
 - 如果 route 指定了 `health_service`，并且该 service 有 compose healthcheck：轮询 `Ps`，直到它变成 `healthy`。
 - 否则探测 upstream：`http` 路由要求返回任意 HTTP 响应；`tcp` 路由要求连接保持打开约 150ms（或收到数据）。原因是 Docker 的端口代理会在容器内服务还没监听时就接受连接，然后立刻关闭，单纯拨号成功不能说明服务已就绪。
+- exec 项目在等待期间如果 `Alive` 返回 false（进程已退出），立即判定启动失败，并把日志末尾附在错误里，不用等满 `start_timeout`。
 - 总时长受 `start_timeout` 约束（默认 3 分钟）。
 
 ### 配置模型
 
-- **项目**：`name`（唯一，作为 compose 项目名）、`dir`、`files`（默认使用 compose 的默认文件名查找规则）、`env_file`（可选）、`profiles`（可选）、`idle_timeout`（默认 15 分钟）、`start_timeout`（默认 3 分钟）、`routes`。
-- **路由**：`listen`（端口，全局唯一）、`bind`（默认 `0.0.0.0`）、`mode`（`tcp` 或 `http`）、`upstream`（`host:port`）、`health_service`（可选）。
+- **项目公共字段**：`name`（唯一）、`type`（`compose` 默认 / `docker` / `exec`）、`env_file`（可选；compose/exec 的相对路径基于 `dir`，docker 基于 portwake 的工作目录）、`env`（可选，键值对）、`idle_timeout`（默认 15 分钟）、`start_timeout`（默认 3 分钟）、`stop_timeout`（默认 10 秒）、`stop_signal`（默认 `SIGTERM`，仅 docker/exec）、`routes`。
+- **compose 字段**：`dir`（必填）、`files`（可选；留空时使用 compose 的默认查找顺序：`compose.yaml`、`compose.yml`、`docker-compose.yaml`、`docker-compose.yml`，同时存在时靠前者优先）、`profiles`（可选）。项目名同时作为 compose 项目名。
+- **docker 字段**：`image`（必填）、`container_name`（默认 `portwake-<name>`）、`command`（覆盖镜像 CMD）、`volumes`、`ports`、`network`。
+- **exec 字段**：`command`（argv 数组，必填，不经过 shell）、`dir`（工作目录，可选）。
+- **路由**：`listen`（端口，全局唯一）、`bind`（默认 `0.0.0.0`）、`mode`（`tcp` 或 `http`）、`upstream`（`host:port`）、`health_service`（可选，仅 compose）。
+- 保存时按类型校验：缺少必填字段，或出现不属于该类型的字段（例如 compose 项目带 `image`、docker 项目带 `files`），都会拒绝。
+- docker 容器带 `portwake.project=<name>` 标签；删除项目只停止管理，不删除容器和卷。
+- exec 的状态文件是 `<state-dir>/<name>.json`（pid、启动时间、命令），日志是 `<state-dir>/logs/<name>.log`；`--state-dir` 默认是 `<db>.state`。
 - 默认由 SQLite 保存项目配置（使用 `modernc.org/sqlite` 驱动，纯 Go，不需要 cgo）；指定 `--config <yaml>` 时，YAML 文件成为唯一配置源，Web 修改原子写回该文件。事件和统计始终保存在 SQLite 中。
 - YAML 导入导出的结构和上面的模型一一对应。导入时整体校验，失败就不写入任何内容。
 
@@ -179,6 +213,7 @@ stopped  --(核对发现在跑)-->         running   (立即开始空闲计时)
 
 - 项目的增删改查，路由作为项目的子资源。写操作返回校验或监听错误。
 - 对项目执行启动或停止操作。
+- 查看项目日志：`GET /api/projects/:name/logs?lines=N` 返回最近 N 行纯文本（上限 2000）。
 - 状态快照：每个项目的状态、活跃连接数、运行时长、空闲倒计时、最近一次错误。
 - 事件查询：支持按项目、类型、时间范围筛选，并支持分页。
 - 统计查询：汇总指标，以及按小时的时序数据。
@@ -194,8 +229,8 @@ stopped  --(核对发现在跑)-->         running   (立即开始空闲计时)
 
 ### CLI
 
-- 根命令启动服务。参数：`--db`（默认 `./portwake.db`）、`--web`（默认 `127.0.0.1:9000`）、`--config <yaml>`（文件模式）、`--import <yaml>`（仅 db 模式）、`--tui`、`--grace`（默认 10 秒）、`--version`。
-- `docker` 从 PATH 中查找。
+- 根命令启动服务。参数：`--db`（默认 `./portwake.db`）、`--web`（默认 `127.0.0.1:9000`）、`--config <yaml>`（文件模式）、`--import <yaml>`（仅 db 模式）、`--state-dir`（exec 的 pid/日志目录，默认 `<db>.state`）、`--tui`、`--grace`（默认 10 秒）、`--version`。
+- 启动时不强制要求 `docker` 存在：只有使用 compose/docker 类型时才需要，纯 exec 场景无需安装 docker。
 - 未开启 TUI 时，日志用 charm log 输出到 stderr；开启 TUI 时，日志只进入 TUI 的事件面板。
 
 ### TUI
@@ -207,7 +242,8 @@ stopped  --(核对发现在跑)-->         running   (立即开始空闲计时)
 ## Testing Decisions
 
 - **好的测试只验证外部行为**：通过真实的入口端口连接、HTTP 请求和 Web API 观察结果，不断言内部字段、goroutine 或调用顺序等实现细节。
-- **唯一的接缝是 `ComposeRunner`**。测试里用一个模拟实现：执行 `Up` 时在本地随机端口上起真实的 TCP/HTTP echo 服务，代替“容器”；执行 `Stop` 时关闭这些服务；`Ps` 返回模拟的运行和健康状态。它可以设置启动延迟、启动失败、健康状态变化，并能统计 Up/Stop 的调用次数。
+- **唯一的接缝是 `runner.Manager` / `Runner`**。测试里用伪造实现（`composetest.Fake` 同时充当 compose 和 docker runner）：执行 `Up` 时在本地随机端口上起真实的 TCP/HTTP echo 服务，代替“容器”；执行 `Stop` 时关闭这些服务；`Ps` 返回模拟的运行和健康状态。它可以设置启动延迟、启动失败、健康状态变化、日志内容，并能统计 Up/Stop 的调用次数。
+- **exec runner 用真实的子进程测试**：重新执行测试二进制作为辅助进程，验证启动、转发、空闲停止、再次启动、进程组清理、升级到 `SIGKILL`、环境变量优先级，以及跨 runner 实例的进程接管。只有这些用例使用真实进程，其余测试都走伪造 runner。
 - **从最外层驱动**：测试通过 app 模块构造整个应用（使用临时 SQLite 文件、模拟 runner、随机的 Web 端口和入口端口），然后只通过这两类外部入口操作：
   1. 向入口端口发起 TCP 连接或 HTTP 请求：验证按需拉起、并发连接只 Up 一次、转发正确、启动超时时断开连接或返回 502、WebSocket 透传。
   2. 调用 Web JSON API 和 SSE：验证配置的增删改、热更新、端口冲突时回滚、手动启停、状态快照、事件和统计、YAML 导入导出。
@@ -226,16 +262,17 @@ stopped  --(核对发现在跑)-->         running   (立即开始空闲计时)
 - 按 cron 计划停止项目，以及用 `down` 代替 `stop`。
 - 基于“无字节流量”的空闲判断，以及强制断开长连接。
 - 只按单个 service 启停。
-- 在 Web 和 TUI 里查看容器日志（`docker compose logs`）。
+- 在 TUI 里查看项目日志（Web 项目卡片支持）。
+- exec 二进制自行 daemonize 或脱离进程组后的跟踪，以及 PTY/tty 交互。
 - 常驻和服务化（launchd/systemd、`install` 命令），以及 `--docker` 路径参数。
 - 退出时停止所有项目。
 - 集群和多主机。
 
 ## Further Notes
 
-- 后端 compose 项目需要自己把服务端口发布到宿主机上（建议绑定到 `127.0.0.1`），而且不能和 portwake 的入口端口冲突。README 里应该说明这一点，并给出示例。
-- 由于配置里的项目全部被接管，所以手动启动的项目也会在空闲后被停掉。不想被停的项目把 `idle_timeout` 设为 0。
-- macOS 下用的是 Docker Desktop 或兼容的运行时，`docker compose` v2 必须可用。
-- 仓库提供 `Dockerfile`、`docker-compose.yaml` 和 GitHub Actions 镜像构建；容器内运行时同样需要宿主机 `docker compose` v2。
+- 后端必须自己监听/发布端口，而且不能和 portwake 的入口端口冲突：compose 服务要把端口发布到宿主机（建议绑定到 `127.0.0.1`），docker 类型用 `ports` 发布，exec 由二进制自己监听。README 里给出了示例。
+- 由于配置里的项目全部被接管，所以手动启动的项目（包括手动跑起来的 exec 进程）也会在空闲后被停掉。不想被停的项目把 `idle_timeout` 设为 0。
+- macOS 下用的是 Docker Desktop 或兼容的运行时，`docker compose` v2 必须可用；只用 exec 时不需要 docker。
+- 仓库提供 `Dockerfile` 和 `docker-compose.yaml`；容器内运行 compose/docker 类型同样需要宿主机的 docker CLI 和 socket，而 exec 类型启动的进程会跑在 portwake 容器内，通常不如直接在宿主机上运行 portwake。
 - 推送 `v*` tag 时，GitHub Actions 会交叉编译 Linux / macOS 的 amd64 / arm64 二进制并创建 Release，附带校验和文件。
-- 后续可以考虑的功能：容器日志查看、启动等待页、按 Host 路由、按 cron 停止。
+- 后续可以考虑的功能：启动等待页、按 Host 路由、按 cron 停止、TUI 日志面板。

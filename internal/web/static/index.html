@@ -115,6 +115,9 @@ dialog::backdrop { background: #00000066; backdrop-filter: blur(2px); }
 .toast { position: fixed; bottom: 20px; right: 20px; background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow);
   border-radius: 10px; padding: 10px 14px; font-size: 13px; max-width: 420px; z-index: 50; }
 .toast.err { border-color: var(--err); color: var(--err); }
+.logview { margin: 0; padding: 12px 14px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+  max-height: 60vh; min-height: 120px; overflow: auto; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 @media (max-width: 640px) {
   .bar { gap: 12px; padding: 0 16px; } main { padding: 18px 16px 48px; }
@@ -154,6 +157,9 @@ dialog::backdrop { background: #00000066; backdrop-filter: blur(2px); }
             <span class="badge" :class="'s-' + st(p.name).state"><i></i><span x-text="stateLabel(st(p.name).state)"></span></span>
           </div>
           <div class="chips">
+            <span class="chip" x-text="p.type || 'compose'"></span>
+            <span class="chip" x-show="p.type === 'docker'" x-text="p.image"></span>
+            <span class="chip" x-show="p.type === 'exec'" :title="(p.command || []).join(' ')" x-text="p.command && p.command[0]"></span>
             <template x-for="r in p.routes" :key="r.listen">
               <span class="chip" :title="r.bind + ':' + r.listen + ' → ' + r.upstream"><b x-text="r.listen"></b> <span x-text="r.mode"></span> → <span x-text="r.upstream"></span></span>
             </template>
@@ -168,6 +174,7 @@ dialog::backdrop { background: #00000066; backdrop-filter: blur(2px); }
             <button class="btn sm" @click="control(p.name, 'start')" :disabled="st(p.name).state !== 'stopped'">▶ 启动</button>
             <button class="btn sm" @click="control(p.name, 'stop')" :disabled="st(p.name).state !== 'running'">■ 停止</button>
             <span class="grow"></span>
+            <button class="btn sm" @click="openLogs(p.name)">日志</button>
             <button class="btn sm" @click="openEditor(p)">编辑</button>
             <button class="btn sm danger" @click="remove(p.name)">删除</button>
           </div>
@@ -302,7 +309,7 @@ dialog::backdrop { background: #00000066; backdrop-filter: blur(2px); }
       <button class="btn" @click="loadYAML()">载入当前配置</button>
       <button class="btn primary" @click="importYAML()">导入</button>
     </div>
-    <textarea x-model="yaml" spellcheck="false" placeholder="projects:&#10;  - name: web&#10;    dir: /path/to/compose&#10;    routes:&#10;      - listen: 8080&#10;        upstream: 127.0.0.1:18080"></textarea>
+    <textarea x-model="yaml" spellcheck="false" placeholder="projects:&#10;  - name: web&#10;    dir: /path/to/compose&#10;    routes:&#10;      - listen: 8080&#10;        upstream: 127.0.0.1:18080&#10;  - name: app&#10;    type: exec&#10;    command: [./app, --port, 18080]&#10;    routes:&#10;      - listen: 8081&#10;        upstream: 127.0.0.1:18080"></textarea>
     <div class="formerr" style="margin-top:10px" x-text="yamlErr"></div>
   </section>
 </main>
@@ -314,24 +321,47 @@ dialog::backdrop { background: #00000066; backdrop-filter: blur(2px); }
       <div class="dlg-h"><h2 x-text="editing.orig ? '编辑 ' + editing.orig : '新建项目'"></h2></div>
       <div class="dlg-b">
         <div class="form">
-          <label>项目名（compose -p）<input x-model.trim="editing.name" required placeholder="web" pattern="[a-z0-9][a-z0-9_-]*"></label>
-          <label>compose 目录<input x-model.trim="editing.dir" required placeholder="/srv/web"></label>
-          <label class="full">compose 文件（逗号分隔，留空使用默认）<input x-model="editing.files" placeholder="compose.yaml, compose.override.yaml"></label>
+          <label>项目名<input x-model.trim="editing.name" required placeholder="web" pattern="[a-z0-9][a-z0-9_-]*"></label>
+          <label>类型
+            <select x-model="editing.type">
+              <option value="compose">compose · docker compose 项目</option>
+              <option value="docker">docker · 单个容器</option>
+              <option value="exec">exec · 直接运行二进制</option>
+            </select>
+          </label>
+
+          <label class="full" x-show="editing.type === 'compose'">compose 目录<input x-model.trim="editing.dir" :required="editing.type === 'compose'" placeholder="/srv/web"></label>
+          <label class="full" x-show="editing.type === 'compose'">compose 文件（逗号分隔，留空使用默认）<input x-model="editing.files" placeholder="compose.yaml, compose.override.yaml"></label>
+          <label x-show="editing.type === 'compose'">profiles（逗号分隔）<input x-model="editing.profiles" placeholder="可选"></label>
+
+          <label x-show="editing.type === 'docker'">镜像<input x-model.trim="editing.image" :required="editing.type === 'docker'" placeholder="nginx:alpine"></label>
+          <label x-show="editing.type === 'docker'">容器名（默认 portwake-&lt;项目名&gt;）<input x-model.trim="editing.container_name" placeholder="可选"></label>
+          <label class="full" x-show="editing.type === 'docker'">端口映射（逗号分隔，如 127.0.0.1:18080:80）<input x-model="editing.ports" placeholder="127.0.0.1:18080:80"></label>
+          <label class="full" x-show="editing.type === 'docker'">卷挂载（逗号分隔，如 /srv/data:/data）<input x-model="editing.volumes" placeholder="/srv/data:/data"></label>
+          <label x-show="editing.type === 'docker'">网络<input x-model.trim="editing.network" placeholder="可选，如 host"></label>
+
+          <label x-show="editing.type === 'exec'">工作目录<input x-model.trim="editing.dir" placeholder="可选"></label>
+
+          <label class="full" x-show="editing.type !== 'compose'">命令（每行一个参数）<textarea x-model="editing.command" :required="editing.type === 'exec'" placeholder="./server&#10;--port&#10;18080" style="min-height:80px"></textarea></label>
+          <label class="full" x-show="editing.type !== 'compose'">环境变量（每行 KEY=VALUE）<textarea x-model="editing.env" placeholder="LOG_LEVEL=info" style="min-height:80px"></textarea></label>
+
           <label>env 文件<input x-model.trim="editing.env_file" placeholder="可选"></label>
-          <label>profiles（逗号分隔）<input x-model="editing.profiles" placeholder="可选"></label>
+          <label x-show="editing.type !== 'compose'">停止信号<input x-model.trim="editing.stop_signal" placeholder="默认 SIGTERM"></label>
           <label>空闲超时（默认 15m，0 表示永不）<input x-model.trim="editing.idle_timeout" placeholder="15m"></label>
           <label>启动超时（默认 3m）<input x-model.trim="editing.start_timeout" placeholder="3m"></label>
+          <label>停止超时（默认 10s）<input x-model.trim="editing.stop_timeout" placeholder="10s"></label>
+
           <div class="full">
             <div class="row" style="margin-bottom:8px"><b style="font-size:13px">路由</b><span class="grow" style="flex:1"></span><button type="button" class="btn sm" @click="addRoute()">＋ 添加</button></div>
             <div class="routes">
-              <div class="route route-h"><span>入口端口</span><span>bind</span><span>模式</span><span>上游地址</span><span>health service</span><span></span></div>
+              <div class="route route-h"><span>入口端口</span><span>bind</span><span>模式</span><span>上游地址</span><span>health service（compose）</span><span></span></div>
               <template x-for="(r, i) in editing.routes" :key="i">
                 <div class="route">
                   <input type="number" min="1" max="65535" x-model.number="r.listen" required placeholder="8080">
                   <input x-model.trim="r.bind" placeholder="0.0.0.0">
                   <select x-model="r.mode"><option>tcp</option><option>http</option></select>
                   <input x-model.trim="r.upstream" required placeholder="127.0.0.1:18080">
-                  <input x-model.trim="r.health_service" placeholder="可选">
+                  <input x-model.trim="r.health_service" x-show="editing.type === 'compose'" placeholder="可选">
                   <button type="button" class="x" @click="editing.routes.splice(i, 1)" title="删除">×</button>
                 </div>
               </template>
@@ -348,6 +378,23 @@ dialog::backdrop { background: #00000066; backdrop-filter: blur(2px); }
   </template>
 </dialog>
 
+<!-- 项目日志 -->
+<dialog x-ref="logDlg" @close="closeLogs()">
+  <div class="dlg-h">
+    <h2 x-text="'日志 · ' + logName"></h2>
+    <span style="flex:1"></span>
+    <button type="button" class="btn sm" @click="loadLogs()">刷新</button>
+  </div>
+  <div class="dlg-b">
+    <pre class="logview" x-text="logText || '（暂无输出）'"></pre>
+  </div>
+  <div class="dlg-f">
+    <span class="sub" x-text="logNote"></span>
+    <span style="flex:1"></span>
+    <button type="button" class="btn" @click="$refs.logDlg.close()">关闭</button>
+  </div>
+</dialog>
+
 <div class="toast" :class="{err: toast.err}" x-show="toast.msg" x-transition x-text="toast.msg" x-cloak></div>
 
 <script src="vendor/uplot.min.js"></script>
@@ -360,6 +407,7 @@ function app() {
     evList: [], evMore: false, evFilter: {project: '', type: '', hours: 0},
     stats: [], records: [], statProject: '', statRange: 168, tot: {}, charts: [],
     yaml: '', yamlErr: '', editing: null, formErr: '', toast: {msg: '', err: false},
+    logName: '', logText: '', logNote: '', _logTimer: null,
 
     init() {
       try { const t = localStorage.getItem('portwake.tab'); if (t && this.tabs.some(x => x.id === t)) this.tab = t; } catch (e) {}
@@ -463,35 +511,101 @@ function app() {
       catch (e) { this.notify(e.message, true); }
     },
     async remove(name) {
-      if (!confirm(`删除项目 ${name}？\n只会停止监听入口端口，不会停止正在运行的容器。`)) return;
+      if (!confirm(`删除项目 ${name}？\n只会停止监听入口端口，不会停止正在运行的项目。`)) return;
       try { await this.api('DELETE', 'projects/' + encodeURIComponent(name)); await this.refresh(); this.notify('已删除 ' + name); }
       catch (e) { this.notify(e.message, true); }
     },
+    async openLogs(name) {
+      this.logName = name; this.logText = ''; this.logNote = '每 2 秒刷新';
+      this.$refs.logDlg.showModal();
+      clearInterval(this._logTimer);
+      await this.loadLogs();
+      this._logTimer = setInterval(() => this.loadLogs(), 2000);
+    },
+    closeLogs() {
+      clearInterval(this._logTimer); this._logTimer = null;
+      this.logName = ''; this.logText = ''; this.logNote = '';
+    },
+    async loadLogs() {
+      if (!this.logName) return;
+      try {
+        const r = await fetch('api/projects/' + encodeURIComponent(this.logName) + '/logs?lines=300');
+        const text = await r.text();
+        if (!r.ok) {
+          let msg = text;
+          try { msg = JSON.parse(text).error || text; } catch (e) {}
+          throw new Error(msg);
+        }
+        this.logText = text; this.logNote = '每 2 秒刷新';
+      } catch (e) { this.logNote = e.message; }
+    },
     openEditor(p) {
       const split = (a) => (a || []).join(', ');
+      const lines = (a) => (a || []).join('\n');
+      const envText = (m) => Object.entries(m || {}).map(([k, v]) => k + '=' + v).join('\n');
       this.formErr = '';
       this.editing = p ? {
-        orig: p.name, name: p.name, dir: p.dir, files: split(p.files), env_file: p.env_file || '', profiles: split(p.profiles),
+        orig: p.name, name: p.name, type: p.type || 'compose',
+        dir: p.dir || '', files: split(p.files), profiles: split(p.profiles),
+        image: p.image || '', container_name: p.container_name || '', ports: split(p.ports), volumes: split(p.volumes), network: p.network || '',
+        command: lines(p.command), env: envText(p.env),
+        env_file: p.env_file || '', stop_signal: p.stop_signal || '', stop_timeout: p.stop_timeout ?? '',
         idle_timeout: p.idle_timeout ?? '', start_timeout: p.start_timeout ?? '',
         routes: p.routes.map(r => ({...r, health_service: r.health_service || ''})),
-      } : {orig: null, name: '', dir: '', files: '', env_file: '', profiles: '', idle_timeout: '', start_timeout: '',
+      } : {orig: null, name: '', type: 'compose', dir: '', files: '', profiles: '',
+        image: '', container_name: '', ports: '', volumes: '', network: '', command: '', env: '',
+        env_file: '', stop_signal: '', stop_timeout: '', idle_timeout: '', start_timeout: '',
         routes: [{listen: '', bind: '0.0.0.0', mode: 'tcp', upstream: '', health_service: ''}]};
       this.$nextTick(() => this.$refs.dlg.showModal());
     },
     addRoute() { this.editing.routes.push({listen: '', bind: '0.0.0.0', mode: 'tcp', upstream: '', health_service: ''}); },
     async save() {
-      const e = this.editing, list = (s) => s.split(',').map(x => x.trim()).filter(Boolean);
-      const p = {name: e.name, dir: e.dir, routes: e.routes.map(r => {
+      const e = this.editing;
+      const list = (s) => String(s || '').split(',').map(x => x.trim()).filter(Boolean);
+      const args = (s) => String(s || '').split('\n').map(x => x.trim()).filter(Boolean);
+      const env = (s) => {
+        const o = {};
+        for (const line of String(s || '').split('\n')) {
+          const t = line.trim();
+          if (!t || t.startsWith('#')) continue;
+          const i = t.indexOf('=');
+          if (i <= 0) throw new Error('环境变量格式应为 KEY=VALUE：' + t);
+          o[t.slice(0, i).trim()] = t.slice(i + 1).trim();
+        }
+        return o;
+      };
+      const p = {name: e.name, routes: e.routes.map(r => {
         const o = {listen: Number(r.listen), bind: r.bind || '0.0.0.0', mode: r.mode, upstream: r.upstream};
-        if (r.health_service) o.health_service = r.health_service;
+        if (e.type === 'compose' && r.health_service) o.health_service = r.health_service;
         return o;
       })};
-      if (list(e.files).length) p.files = list(e.files);
-      if (list(e.profiles).length) p.profiles = list(e.profiles);
-      if (e.env_file) p.env_file = e.env_file;
-      if (String(e.idle_timeout) !== '') p.idle_timeout = String(e.idle_timeout);
-      if (String(e.start_timeout) !== '') p.start_timeout = String(e.start_timeout);
       try {
+        if (e.type !== 'compose') p.type = e.type;
+        if (e.type === 'compose') {
+          p.dir = e.dir;
+          if (list(e.files).length) p.files = list(e.files);
+          if (list(e.profiles).length) p.profiles = list(e.profiles);
+        } else if (e.type === 'docker') {
+          p.image = e.image;
+          if (e.container_name) p.container_name = e.container_name;
+          if (list(e.ports).length) p.ports = list(e.ports);
+          if (list(e.volumes).length) p.volumes = list(e.volumes);
+          if (e.network) p.network = e.network;
+          if (args(e.command).length) p.command = args(e.command);
+          const ev = env(e.env);
+          if (Object.keys(ev).length) p.env = ev;
+          if (e.stop_signal) p.stop_signal = e.stop_signal;
+        } else {
+          if (e.dir) p.dir = e.dir;
+          p.command = args(e.command);
+          const ev = env(e.env);
+          if (Object.keys(ev).length) p.env = ev;
+          if (e.stop_signal) p.stop_signal = e.stop_signal;
+        }
+        if (e.env_file) p.env_file = e.env_file;
+        if (String(e.stop_timeout) !== '') p.stop_timeout = String(e.stop_timeout);
+        if (String(e.idle_timeout) !== '') p.idle_timeout = String(e.idle_timeout);
+        if (String(e.start_timeout) !== '') p.start_timeout = String(e.start_timeout);
         if (e.orig) await this.api('PUT', 'projects/' + encodeURIComponent(e.orig), p);
         else await this.api('POST', 'projects', p);
         this.$refs.dlg.close(); await this.refresh(); this.notify('已保存 ' + p.name);
